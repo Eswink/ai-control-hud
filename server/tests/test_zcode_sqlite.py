@@ -70,19 +70,26 @@ def test_collects_visible_tasks_and_maps_conservative_statuses(tmp_path: Path) -
     assert payload.tasks[0].workspace == "alpha"
     assert payload.tasks[0].updated_at is not None
     assert payload.tasks[0].updated_at.tzinfo is not None
+    assert payload.tasks[0].id.startswith("zcode-")
+    assert "wk-a" not in payload.tasks[0].id
+    assert "task-1" not in payload.tasks[0].id
     assert payload.summary.running == 1
     assert payload.summary.waiting == 1
     assert payload.summary.completed == 1
     assert payload.summary.failed == 0
 
 
-def test_respects_task_limit(tmp_path: Path) -> None:
+def test_task_limit_does_not_truncate_summary_counts(tmp_path: Path) -> None:
     db = tmp_path / "tasks-index.sqlite"
     _create_task_index(db)
 
     payload = asyncio.run(ZCodeSQLiteAdapter(db, task_limit=2).collect())
 
     assert len(payload.tasks) == 2
+    assert payload.summary.running == 1
+    assert payload.summary.waiting == 1
+    # This task is outside the two displayed rows; summary must still count it.
+    assert payload.summary.completed == 1
 
 
 def test_missing_or_changed_schema_fails_visibly(tmp_path: Path) -> None:
