@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI
 
 from .hud.adapters.base import CommandCodeAdapter, ZCodeAdapter
+from .hud.adapters.commandcode_zcode import CommandCodeZCodeProviderAdapter
 from .hud.adapters.zcode_sqlite import ZCodeSQLiteAdapter
 from .hud.bootstrap import build_bootstrap_state
 from .hud.config import RuntimeConfig
@@ -88,7 +89,10 @@ def create_production_app() -> FastAPI:
     fixture_name = os.getenv("HUD_FIXTURE")
     if fixture_name:
         return create_app(fixture=fixture_name)
-    return create_app(zcode_adapter=ZCodeSQLiteAdapter.from_environment())
+    return create_app(
+        zcode_adapter=ZCodeSQLiteAdapter.from_environment(),
+        command_code_adapter=CommandCodeZCodeProviderAdapter.from_environment(),
+    )
 
 
 app = create_production_app()
