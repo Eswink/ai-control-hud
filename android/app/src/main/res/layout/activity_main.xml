@@ -98,6 +98,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
+                android:ellipsize="middle"
+                android:maxLines="1"
+                android:textColor="#5F6368"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/lastUpdateText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Waiting for first snapshot"
                 android:textColor="#5F6368"
                 android:textSize="11sp" />
 
@@ -118,11 +129,12 @@
 
             <TextView
                 android:id="@+id/zcodeHealth"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
+                android:maxLines="2"
                 android:text="--"
-                android:textColor="#8AB4F8"
+                android:textColor="#9AA0A6"
                 android:textSize="13sp" />
 
             <TextView
@@ -135,34 +147,30 @@
                 android:textSize="20sp"
                 android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/taskStatus"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:id="@+id/taskList"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="NO TASK"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/taskEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="Task data unavailable"
                 android:textColor="#9AA0A6"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/taskOverflow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="end"
+                android:textColor="#8AB4F8"
                 android:textSize="12sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/taskTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="5dp"
-                android:maxLines="2"
-                android:text="No task data"
-                android:textColor="#F1F3F4"
-                android:textSize="20sp" />
-
-            <TextView
-                android:id="@+id/taskActivity"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="5dp"
-                android:maxLines="2"
-                android:textColor="#9AA0A6"
-                android:textSize="13sp" />
+                android:visibility="gone" />
 
             <View
                 android:layout_width="match_parent"
@@ -181,11 +189,12 @@
 
             <TextView
                 android:id="@+id/commandHealth"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
+                android:maxLines="2"
                 android:text="--"
-                android:textColor="#8AB4F8"
+                android:textColor="#9AA0A6"
                 android:textSize="13sp" />
 
             <TextView
