@@ -3,7 +3,9 @@ package dev.eswink.aicontrolhud;
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -16,26 +18,42 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
 import java.util.Locale;
+import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "hud_settings";
     private static final String KEY_SERVER_URL = "server_url";
     private static final long POLL_MS = 2000L;
     private static final long MAX_BACKOFF_MS = 30000L;
+    private static final long COUNTDOWN_TICK_MS = 1000L;
+    private static final int MAX_TASK_ROWS = 4;
+    private static final Pattern ISO_TIMESTAMP = Pattern.compile(
+            "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(?:\\.\\d+)?(Z|[+-]\\d{2}:?\\d{2})$"
+    );
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean requestInFlight = new AtomicBoolean(false);
     private final StateClient client = new StateClient();
+    private final ArrayList<TaskRow> taskRows = new ArrayList<>();
 
     private SharedPreferences preferences;
     private boolean polling;
     private int failureCount;
     private String serverUrl;
+    private StateSnapshot lastSnapshot;
 
     private LinearLayout setupPanel;
     private ScrollView dashboardPanel;
@@ -44,11 +62,12 @@ public final class MainActivity extends Activity {
     private TextView setupStatus;
     private TextView liveStatus;
     private TextView serverLabel;
+    private TextView lastUpdateText;
     private TextView zcodeHealth;
     private TextView zcodeSummary;
-    private TextView taskStatus;
-    private TextView taskTitle;
-    private TextView taskActivity;
+    private LinearLayout taskList;
+    private TextView taskEmpty;
+    private TextView taskOverflow;
     private TextView commandHealth;
     private TextView planText;
     private TextView creditText;
@@ -58,6 +77,14 @@ public final class MainActivity extends Activity {
     private ProgressBar weeklyProgress;
 
     private final Runnable pollRunnable = this::requestState;
+    private final Runnable countdownRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!polling) return;
+            if (lastSnapshot != null) renderUsageWindows(lastSnapshot);
+            mainHandler.postDelayed(this, COUNTDOWN_TICK_MS);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -107,11 +134,12 @@ public final class MainActivity extends Activity {
         setupStatus = findViewById(R.id.setupStatus);
         liveStatus = findViewById(R.id.liveStatus);
         serverLabel = findViewById(R.id.serverLabel);
+        lastUpdateText = findViewById(R.id.lastUpdateText);
         zcodeHealth = findViewById(R.id.zcodeHealth);
         zcodeSummary = findViewById(R.id.zcodeSummary);
-        taskStatus = findViewById(R.id.taskStatus);
-        taskTitle = findViewById(R.id.taskTitle);
-        taskActivity = findViewById(R.id.taskActivity);
+        taskList = findViewById(R.id.taskList);
+        taskEmpty = findViewById(R.id.taskEmpty);
+        taskOverflow = findViewById(R.id.taskOverflow);
         commandHealth = findViewById(R.id.commandHealth);
         planText = findViewById(R.id.planText);
         creditText = findViewById(R.id.creditText);
@@ -133,6 +161,7 @@ public final class MainActivity extends Activity {
         setupPanel.setVisibility(View.GONE);
         dashboardPanel.setVisibility(View.VISIBLE);
         serverLabel.setText(serverUrl);
+        lastUpdateText.setText("Waiting for first snapshot");
         liveStatus.setText("CONNECTING");
         liveStatus.setTextColor(Color.rgb(253, 214, 99));
     }
@@ -168,12 +197,15 @@ public final class MainActivity extends Activity {
         if (polling) return;
         polling = true;
         mainHandler.removeCallbacks(pollRunnable);
+        mainHandler.removeCallbacks(countdownRunnable);
         mainHandler.post(pollRunnable);
+        mainHandler.post(countdownRunnable);
     }
 
     private void stopPolling() {
         polling = false;
         mainHandler.removeCallbacks(pollRunnable);
+        mainHandler.removeCallbacks(countdownRunnable);
     }
 
     private void scheduleNext(long delayMs) {
@@ -197,6 +229,7 @@ public final class MainActivity extends Activity {
                 mainHandler.post(() -> {
                     requestInFlight.set(false);
                     polling = false;
+                    mainHandler.removeCallbacks(countdownRunnable);
                     showCompatibilityError(incompatible.receivedSchema);
                 });
             } catch (Exception error) {
@@ -211,53 +244,213 @@ public final class MainActivity extends Activity {
     }
 
     private void render(StateSnapshot state) {
+        lastSnapshot = state;
         boolean live = "live".equals(state.overallStatus);
         liveStatus.setText(live ? "● LIVE" : "● DEGRADED");
         liveStatus.setTextColor(live ? Color.rgb(129, 201, 149) : Color.rgb(253, 214, 99));
         serverLabel.setText(serverUrl);
-        zcodeHealth.setText("source: " + upper(state.zcodeHealth));
-        commandHealth.setText("source: " + upper(state.commandHealth));
-        zcodeSummary.setText(formatSummary(state));
+        lastUpdateText.setText("Updated " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()));
 
-        if (state.taskTitle == null) {
-            taskStatus.setText("NO TASK DATA");
-            taskStatus.setTextColor(Color.rgb(154, 160, 166));
-            taskTitle.setText("--");
-            taskActivity.setText("");
-        } else {
-            taskStatus.setText(upper(state.taskStatus));
-            taskStatus.setTextColor(taskColor(state.taskStatus));
-            taskTitle.setText(state.taskTitle);
-            taskActivity.setText(state.taskActivity == null ? "" : state.taskActivity);
-        }
+        renderSourceHealth(zcodeHealth, state.zcodeHealth, state.zcodeMessage);
+        renderSourceHealth(commandHealth, state.commandHealth, state.commandMessage);
+        zcodeSummary.setText(formatSummary(state));
+        renderTasks(state.tasks);
 
         planText.setText("Plan  " + valueOrDash(state.plan));
         creditText.setText(formatCredit(state));
+        renderUsageWindows(state);
+    }
+
+    private void renderSourceHealth(TextView view, String status, String message) {
+        String text = "● " + upper(status);
+        if (message != null && !message.isEmpty()) text += " · " + message;
+        view.setText(text);
+        view.setTextColor(sourceHealthColor(status));
+    }
+
+    private void renderTasks(List<StateSnapshot.TaskItem> tasks) {
+        if (tasks == null) {
+            hideAllTaskRows();
+            taskEmpty.setVisibility(View.VISIBLE);
+            taskEmpty.setText("Task data unavailable");
+            taskOverflow.setVisibility(View.GONE);
+            return;
+        }
+
+        if (tasks.isEmpty()) {
+            hideAllTaskRows();
+            taskEmpty.setVisibility(View.VISIBLE);
+            taskEmpty.setText("No tasks reported");
+            taskOverflow.setVisibility(View.GONE);
+            return;
+        }
+
+        taskEmpty.setVisibility(View.GONE);
+        ArrayList<StateSnapshot.TaskItem> display = new ArrayList<>(tasks);
+        Collections.sort(display, (left, right) -> Integer.compare(taskPriority(left.status), taskPriority(right.status)));
+
+        int visibleCount = Math.min(MAX_TASK_ROWS, display.size());
+        ensureTaskRows(visibleCount);
+        for (int i = 0; i < taskRows.size(); i++) {
+            TaskRow row = taskRows.get(i);
+            if (i < visibleCount) {
+                renderTaskRow(row, display.get(i));
+                row.container.setVisibility(View.VISIBLE);
+            } else {
+                row.container.setVisibility(View.GONE);
+            }
+        }
+
+        int hidden = display.size() - visibleCount;
+        if (hidden > 0) {
+            taskOverflow.setText("+" + hidden + " more task" + (hidden == 1 ? "" : "s"));
+            taskOverflow.setVisibility(View.VISIBLE);
+        } else {
+            taskOverflow.setVisibility(View.GONE);
+        }
+    }
+
+    private void ensureTaskRows(int count) {
+        while (taskRows.size() < count) {
+            TaskRow row = createTaskRow();
+            taskRows.add(row);
+            taskList.addView(row.container);
+        }
+    }
+
+    private TaskRow createTaskRow() {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(12), dp(10), dp(12), dp(10));
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.topMargin = dp(8);
+        container.setLayoutParams(params);
+
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(16, 23, 32));
+        background.setCornerRadius(dp(10));
+        background.setStroke(dp(1), Color.rgb(39, 49, 61));
+        container.setBackground(background);
+
+        TextView status = new TextView(this);
+        status.setTextSize(11);
+        status.setTypeface(null, android.graphics.Typeface.BOLD);
+
+        TextView title = new TextView(this);
+        title.setTextColor(Color.rgb(241, 243, 244));
+        title.setTextSize(17);
+        title.setMaxLines(2);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        titleParams.topMargin = dp(3);
+        title.setLayoutParams(titleParams);
+
+        TextView meta = new TextView(this);
+        meta.setTextColor(Color.rgb(154, 160, 166));
+        meta.setTextSize(12);
+        meta.setMaxLines(3);
+        LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        metaParams.topMargin = dp(4);
+        meta.setLayoutParams(metaParams);
+
+        container.addView(status);
+        container.addView(title);
+        container.addView(meta);
+        return new TaskRow(container, status, title, meta);
+    }
+
+    private void renderTaskRow(TaskRow row, StateSnapshot.TaskItem task) {
+        row.status.setText(upper(task.status));
+        row.status.setTextColor(taskColor(task.status));
+        row.title.setText(task.title);
+        row.meta.setText(formatTaskMeta(task));
+    }
+
+    private String formatTaskMeta(StateSnapshot.TaskItem task) {
+        ArrayList<String> parts = new ArrayList<>();
+        if (task.workspace != null) parts.add(task.workspace);
+        if (task.durationSeconds != null) parts.add(formatDuration(task.durationSeconds));
+        if (task.additions != null || task.deletions != null) {
+            String additions = task.additions == null ? "?" : String.valueOf(task.additions);
+            String deletions = task.deletions == null ? "?" : String.valueOf(task.deletions);
+            parts.add("+" + additions + " / -" + deletions);
+        }
+        String meta = join(parts, " · ");
+        if (task.activity != null) {
+            if (!meta.isEmpty()) meta += "\n";
+            meta += "> " + task.activity;
+        }
+        return meta;
+    }
+
+    private void hideAllTaskRows() {
+        for (TaskRow row : taskRows) row.container.setVisibility(View.GONE);
+    }
+
+    private void renderUsageWindows(StateSnapshot state) {
         renderWindow(state.fiveHour, fiveHourLabel, fiveHourProgress, "5H");
         renderWindow(state.weekly, weeklyLabel, weeklyProgress, "WEEK");
     }
 
-    private void renderWindow(StateSnapshot.UsageWindow window, TextView label, ProgressBar progress, String fallbackName) {
+    private void renderWindow(
+            StateSnapshot.UsageWindow window,
+            TextView label,
+            ProgressBar progress,
+            String fallbackName
+    ) {
         if (window == null || window.usedPercent == null) {
             label.setText(fallbackName + "  --");
             progress.setProgress(0);
+            progress.setProgressTintList(ColorStateList.valueOf(Color.rgb(95, 99, 104)));
             return;
         }
+
         int percent = Math.max(0, Math.min(100, (int) Math.round(window.usedPercent)));
-        String reset = window.resetAt == null ? "" : "  reset " + window.resetAt;
+        String reset = window.resetAt == null ? "" : " · reset " + formatResetCountdown(window.resetAt);
         label.setText(String.format(Locale.US, "%s  %.1f%%%s", fallbackName, window.usedPercent, reset));
         progress.setProgress(percent);
+        progress.setProgressTintList(ColorStateList.valueOf(usageColor(window.usedPercent)));
     }
 
     private String formatSummary(StateSnapshot state) {
-        if (state.running == null || state.waiting == null || state.failed == null || state.completed == null) return "Task summary unavailable";
-        return String.format(Locale.US, "%d running  ·  %d waiting  ·  %d failed", state.running, state.waiting, state.failed);
+        if (state.running == null || state.waiting == null || state.failed == null || state.completed == null) {
+            return "Task summary unavailable";
+        }
+        return String.format(
+                Locale.US,
+                "%d running  ·  %d waiting  ·  %d failed",
+                state.running,
+                state.waiting,
+                state.failed
+        );
     }
 
     private String formatCredit(StateSnapshot state) {
         if (state.creditRemaining == null) return "Credit --";
-        if (state.creditLimit == null) return String.format(Locale.US, "%.2f %s remaining", state.creditRemaining, valueOrDash(state.creditUnit));
-        return String.format(Locale.US, "%.2f / %.2f %s", state.creditRemaining, state.creditLimit, valueOrDash(state.creditUnit));
+        if (state.creditLimit == null) {
+            return String.format(
+                    Locale.US,
+                    "%.2f %s remaining",
+                    state.creditRemaining,
+                    valueOrDash(state.creditUnit)
+            );
+        }
+        return String.format(
+                Locale.US,
+                "%.2f / %.2f %s",
+                state.creditRemaining,
+                state.creditLimit,
+                valueOrDash(state.creditUnit)
+        );
     }
 
     private void showOffline(Exception error) {
@@ -300,6 +493,15 @@ public final class MainActivity extends Activity {
         return value == null || value.isEmpty() ? "--" : value;
     }
 
+    private static int taskPriority(String status) {
+        if ("failed".equals(status)) return 0;
+        if ("running".equals(status)) return 1;
+        if ("waiting".equals(status)) return 2;
+        if ("unknown".equals(status)) return 3;
+        if ("completed".equals(status)) return 4;
+        return 5;
+    }
+
     private static int taskColor(String status) {
         if ("failed".equals(status)) return Color.rgb(242, 139, 130);
         if ("running".equals(status)) return Color.rgb(129, 201, 149);
@@ -307,7 +509,106 @@ public final class MainActivity extends Activity {
         return Color.rgb(154, 160, 166);
     }
 
+    private static int sourceHealthColor(String status) {
+        if ("ok".equals(status)) return Color.rgb(129, 201, 149);
+        if ("stale".equals(status)) return Color.rgb(253, 214, 99);
+        if ("error".equals(status)) return Color.rgb(242, 139, 130);
+        return Color.rgb(154, 160, 166);
+    }
+
+    private static int usageColor(double percent) {
+        if (percent >= 90.0) return Color.rgb(242, 139, 130);
+        if (percent >= 70.0) return Color.rgb(253, 214, 99);
+        return Color.rgb(138, 180, 248);
+    }
+
+    private static String formatDuration(int totalSeconds) {
+        int safe = Math.max(0, totalSeconds);
+        int hours = safe / 3600;
+        int minutes = (safe % 3600) / 60;
+        int seconds = safe % 60;
+        if (hours > 0) return String.format(Locale.US, "%dh %02dm", hours, minutes);
+        if (minutes > 0) return String.format(Locale.US, "%dm %02ds", minutes, seconds);
+        return seconds + "s";
+    }
+
+    private static String formatResetCountdown(String isoTimestamp) {
+        Long resetMillis = parseIsoMillis(isoTimestamp);
+        if (resetMillis == null) return "--";
+        long remainingSeconds = Math.max(0L, (resetMillis - System.currentTimeMillis()) / 1000L);
+        long days = remainingSeconds / 86400L;
+        long hours = (remainingSeconds % 86400L) / 3600L;
+        long minutes = (remainingSeconds % 3600L) / 60L;
+        long seconds = remainingSeconds % 60L;
+        if (days > 0) return String.format(Locale.US, "%dd %02dh", days, hours);
+        return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds);
+    }
+
+    private static Long parseIsoMillis(String value) {
+        if (value == null) return null;
+        Matcher match = ISO_TIMESTAMP.matcher(value);
+        if (!match.matches()) return null;
+        try {
+            int year = Integer.parseInt(match.group(1));
+            int month = Integer.parseInt(match.group(2));
+            int day = Integer.parseInt(match.group(3));
+            int hour = Integer.parseInt(match.group(4));
+            int minute = Integer.parseInt(match.group(5));
+            int second = Integer.parseInt(match.group(6));
+            String zone = match.group(7);
+
+            int offsetMinutes = 0;
+            if (!"Z".equals(zone)) {
+                int sign = zone.charAt(0) == '-' ? -1 : 1;
+                int offsetHours = Integer.parseInt(zone.substring(1, 3));
+                int offsetMins = Integer.parseInt(zone.substring(zone.length() - 2));
+                offsetMinutes = sign * (offsetHours * 60 + offsetMins);
+            }
+
+            Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"), Locale.US);
+            calendar.clear();
+            calendar.set(year, month - 1, day, hour, minute, second);
+            return calendar.getTimeInMillis() - offsetMinutes * 60_000L;
+        } catch (RuntimeException invalidTimestamp) {
+            return null;
+        }
+    }
+
+    private static String join(List<String> values, String separator) {
+        StringBuilder result = new StringBuilder();
+        for (String value : values) {
+            if (result.length() > 0) result.append(separator);
+            result.append(value);
+        }
+        return result.toString();
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
     private void enterImmersiveMode() {
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
+    }
+
+    private static final class TaskRow {
+        final LinearLayout container;
+        final TextView status;
+        final TextView title;
+        final TextView meta;
+
+        TaskRow(LinearLayout container, TextView status, TextView title, TextView meta) {
+            this.container = container;
+            this.status = status;
+            this.title = title;
+            this.meta = meta;
+        }
     }
 }
