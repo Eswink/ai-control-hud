@@ -128,3 +128,39 @@ def test_missing_key_fails_without_leaking_provider_data(tmp_path: Path) -> None
     )
     with pytest.raises(PublicAdapterError, match="API key missing"):
         asyncio.run(CommandCodeZCodeProviderAdapter(path).collect())
+
+
+def test_nonofficial_provider_never_sends_key_without_explicit_opt_in(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    _config(path, base_url="http://127.0.0.1:7788/v1")
+    calls: list[str] = []
+
+    adapter = CommandCodeZCodeProviderAdapter(
+        path,
+        provider_id="command-code",
+        transport=lambda endpoint, _key: (calls.append(endpoint) or 200, b"{}"),
+    )
+    with pytest.raises(PublicAdapterError, match="endpoint is not verified"):
+        asyncio.run(adapter.collect())
+    assert calls == []
+
+
+def test_explicit_nonofficial_provider_can_reuse_verified_commandcode_key(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    _config(path, base_url="http://127.0.0.1:7788/v1")
+
+    def transport(endpoint: str, _key: str) -> tuple[int, bytes]:
+        if endpoint.endswith("/credits"):
+            return 200, b'{"credits":{"monthlyCredits":3}}'
+        return 503, b""
+
+    payload = asyncio.run(
+        CommandCodeZCodeProviderAdapter(
+            path,
+            provider_id="command-code",
+            allow_nonofficial_provider=True,
+            transport=transport,
+        ).collect()
+    )
+    assert payload.usage.credit is not None
+    assert payload.usage.credit.remaining == 3
