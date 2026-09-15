@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 MAX_DATABASES = 100
 MAX_SCAN_DEPTH = 6
+COMMANDCODE_CLI_NAMES = ("cmdc", "command-code", "commandcode", "cmdcode")
 
 
 def display_path(path: Path) -> str:
@@ -31,21 +32,70 @@ def display_path(path: Path) -> str:
         return f"<external>/{path.name}"
 
 
-def safe_cli_version(names: Iterable[str]) -> dict[str, Any] | None:
+def _find_executable(names: Iterable[str]) -> tuple[str, str] | None:
     for name in names:
         executable = shutil.which(name)
-        if not executable:
-            continue
-        result: dict[str, Any] = {"name": name, "found": True, "path": display_path(Path(executable))}
-        try:
-            proc = subprocess.run([executable, "--version"], check=False, capture_output=True, text=True, timeout=3, env={**os.environ, "NO_COLOR": "1"})
-            combined = (proc.stdout or proc.stderr).strip().splitlines()
-            result["versionOutput"] = combined[0][:200] if combined else None
-            result["versionExitCode"] = proc.returncode
-        except (OSError, subprocess.SubprocessError) as exc:
-            result["versionError"] = type(exc).__name__
-        return result
+        if executable:
+            return name, executable
     return None
+
+
+def safe_cli_version(names: Iterable[str]) -> dict[str, Any] | None:
+    found = _find_executable(names)
+    if found is None:
+        return None
+    name, executable = found
+    result: dict[str, Any] = {"name": name, "found": True, "path": display_path(Path(executable))}
+    try:
+        proc = subprocess.run(
+            [executable, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+        combined = (proc.stdout or proc.stderr).strip().splitlines()
+        result["versionOutput"] = combined[0][:200] if combined else None
+        result["versionExitCode"] = proc.returncode
+    except (OSError, subprocess.SubprocessError) as exc:
+        result["versionError"] = type(exc).__name__
+    return result
+
+
+def safe_cli_json_shape(names: Iterable[str], args: list[str]) -> dict[str, Any] | None:
+    found = _find_executable(names)
+    if found is None:
+        return None
+    name, executable = found
+    result: dict[str, Any] = {
+        "name": name,
+        "path": display_path(Path(executable)),
+        "arguments": args,
+        "valuesIncluded": False,
+    }
+    try:
+        proc = subprocess.run(
+            [executable, *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=8,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+        result["exitCode"] = proc.returncode
+        raw = (proc.stdout or "").strip()
+        if raw:
+            try:
+                result["shape"] = json_shape(json.loads(raw))
+            except json.JSONDecodeError:
+                result["stdout"] = {"type": "text", "length": len(raw)}
+        stderr = (proc.stderr or "").strip()
+        if stderr:
+            result["stderr"] = {"type": "text", "length": len(stderr)}
+    except (OSError, subprocess.SubprocessError) as exc:
+        result["error"] = type(exc).__name__
+    return result
 
 
 def _walk_limited(root: Path, suffixes: set[str]) -> list[Path]:
@@ -77,13 +127,30 @@ def sqlite_schema(path: Path) -> dict[str, Any]:
         try:
             report["userVersion"] = conn.execute("PRAGMA user_version").fetchone()[0]
             report["applicationId"] = conn.execute("PRAGMA application_id").fetchone()[0]
-            table_rows = conn.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name").fetchall()
+            table_rows = conn.execute(
+                "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY type, name"
+            ).fetchall()
             objects = []
             for row in table_rows:
                 name = row["name"]
                 quoted = name.replace('"', '""')
                 columns = conn.execute(f'PRAGMA table_info("{quoted}")').fetchall()
-                objects.append({"name": name, "type": row["type"], "columns": [{"name": col["name"], "type": col["type"], "notNull": bool(col["notnull"]), "primaryKey": bool(col["pk"])} for col in columns]})
+                objects.append(
+                    {
+                        "name": name,
+                        "type": row["type"],
+                        "columns": [
+                            {
+                                "name": col["name"],
+                                "type": col["type"],
+                                "notNull": bool(col["notnull"]),
+                                "primaryKey": bool(col["pk"]),
+                            }
+                            for col in columns
+                        ],
+                    }
+                )
             report["objects"] = objects
         finally:
             conn.close()
@@ -96,9 +163,19 @@ def json_shape(value: Any, depth: int = 0) -> Any:
     if depth >= 4:
         return {"type": type(value).__name__}
     if isinstance(value, dict):
-        return {"type": "object", "keys": {str(key)[:120]: json_shape(child, depth + 1) for key, child in sorted(value.items(), key=lambda item: str(item[0]))}}
+        return {
+            "type": "object",
+            "keys": {
+                str(key)[:120]: json_shape(child, depth + 1)
+                for key, child in sorted(value.items(), key=lambda item: str(item[0]))
+            },
+        }
     if isinstance(value, list):
-        return {"type": "array", "length": len(value), "itemTypes": sorted({type(item).__name__ for item in value})}
+        return {
+            "type": "array",
+            "length": len(value),
+            "itemTypes": sorted({type(item).__name__ for item in value}),
+        }
     if value is None:
         return {"type": "null"}
     if isinstance(value, bool):
@@ -147,33 +224,79 @@ def default_zcode_roots() -> list[Path]:
 
 def default_commandcode_roots() -> list[Path]:
     home = Path.home()
-    values = [home / ".commandcode", home / ".config" / "commandcode", home / "Library" / "Application Support" / "CommandCode"]
+    values = [
+        home / ".commandcode",
+        home / ".config" / "commandcode",
+        home / "Library" / "Application Support" / "CommandCode",
+    ]
     for env_name in ("APPDATA", "LOCALAPPDATA"):
         if os.getenv(env_name):
             values.append(Path(os.environ[env_name]) / "CommandCode")
     return values
 
 
-def build_report(zcode_extra: Iterable[str] = (), commandcode_extra: Iterable[str] = ()) -> dict[str, Any]:
+def environment_presence(names: Iterable[str]) -> dict[str, dict[str, bool]]:
+    return {name: {"present": bool(os.getenv(name))} for name in names}
+
+
+def build_report(
+    zcode_extra: Iterable[str] = (),
+    commandcode_extra: Iterable[str] = (),
+    *,
+    commandcode_status: bool = False,
+) -> dict[str, Any]:
     zcode_roots = existing_roots(default_zcode_roots(), zcode_extra)
     command_roots = existing_roots(default_commandcode_roots(), commandcode_extra)
+
     zcode_dbs: list[Path] = []
     for root in zcode_roots:
         zcode_dbs.extend(_walk_limited(root, {".sqlite", ".sqlite3", ".db"}))
     zcode_dbs = list(dict.fromkeys(zcode_dbs))[:MAX_DATABASES]
+
     command_json: list[Path] = []
     for root in command_roots:
         for candidate_name in ("auth.json", "config.json", "settings.json"):
             candidate = root / candidate_name
             if candidate.is_file():
                 command_json.append(candidate)
+
+    command_cli = safe_cli_version(COMMANDCODE_CLI_NAMES)
+    command_status = (
+        safe_cli_json_shape(COMMANDCODE_CLI_NAMES, ["status", "--json"])
+        if commandcode_status
+        else None
+    )
+
     return {
         "reportVersion": REPORT_VERSION,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "privacy": {"networkCalls": False, "sqliteRowsRead": False, "jsonValuesIncluded": False, "hostnameIncluded": False, "usernameIncluded": False},
-        "platform": {"system": platform.system(), "release": platform.release(), "machine": platform.machine(), "python": platform.python_version()},
-        "zcode": {"cli": safe_cli_version(("zcode",)), "roots": [display_path(path) for path in zcode_roots], "databases": [sqlite_schema(path) for path in zcode_dbs]},
-        "commandCode": {"cli": safe_cli_version(("commandcode", "command-code", "cmdcode")), "roots": [display_path(path) for path in command_roots], "jsonFiles": [json_metadata(path) for path in command_json]},
+        "privacy": {
+            "networkCallsByDiscoveryScript": False,
+            "sqliteRowsRead": False,
+            "jsonValuesIncluded": False,
+            "environmentValuesIncluded": False,
+            "hostnameIncluded": False,
+            "usernameIncluded": False,
+            "commandCodeStatusValuesIncluded": False,
+        },
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+            "python": platform.python_version(),
+        },
+        "zcode": {
+            "cli": safe_cli_version(("zcode",)),
+            "roots": [display_path(path) for path in zcode_roots],
+            "databases": [sqlite_schema(path) for path in zcode_dbs],
+        },
+        "commandCode": {
+            "cli": command_cli,
+            "environment": environment_presence(("COMMAND_CODE_API_KEY",)),
+            "roots": [display_path(path) for path in command_roots],
+            "jsonFiles": [json_metadata(path) for path in command_json],
+            "statusProbe": command_status,
+        },
     }
 
 
@@ -181,18 +304,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a metadata-only discovery report for AI Control HUD.")
     parser.add_argument("--zcode-root", action="append", default=[], help="Additional ZCode root to inspect (repeatable).")
     parser.add_argument("--commandcode-root", action="append", default=[], help="Additional CommandCode root to inspect (repeatable).")
+    parser.add_argument(
+        "--commandcode-status",
+        action="store_true",
+        help="Invoke `cmdc status --json` (or equivalent) and record JSON shape only; the CLI may perform its own network checks.",
+    )
     parser.add_argument("--output", default=".local/discovery-report.json", help="Output path (default is gitignored).")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    report = build_report(args.zcode_root, args.commandcode_root)
+    report = build_report(
+        args.zcode_root,
+        args.commandcode_root,
+        commandcode_status=args.commandcode_status,
+    )
     output = Path(args.output).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Wrote sanitized discovery report to {output}")
-    print("Review the report before sharing it; no network calls or database row reads were performed.")
+    print("Review the report before sharing it; no database rows, JSON values, or environment secret values are included.")
+    if args.commandcode_status:
+        print("Command Code status was invoked explicitly; its values were reduced to shape/type metadata only.")
     return 0
 
 
