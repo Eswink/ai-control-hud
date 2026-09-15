@@ -23,6 +23,28 @@ _CREDITS_PATH = "/alpha/billing/credits"
 _SUBSCRIPTIONS_PATH = "/alpha/billing/subscriptions"
 _MAX_RESPONSE_BYTES = 1_000_000
 
+_PLAN_LABELS: dict[str, str] = {
+    "individual-go": "Go",
+    "individual-goat": "GOAT",
+    "individual-pro": "Pro",
+    "individual-pro-v1": "Pro",
+    "individual-provider": "Provider",
+    "individual-max": "Max",
+    "individual-ultra": "Ultra",
+    "teams-pro": "Teams Pro",
+}
+
+_PLAN_CREDITS: dict[str, float] = {
+    "individual-go": 10.0,
+    "individual-goat": 70.0,
+    "individual-pro": 30.0,
+    "individual-pro-v1": 80.0,
+    "individual-provider": 15.0,
+    "individual-max": 150.0,
+    "individual-ultra": 300.0,
+    "teams-pro": 40.0,
+}
+
 
 def _number(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
@@ -53,9 +75,10 @@ def _timestamp(value: Any) -> datetime | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _usage_window(value: Any, name: str) -> UsageWindow | None:
@@ -138,8 +161,6 @@ class CommandCodeZCodeProviderAdapter:
         try:
             provider = find_commandcode_provider(path, explicit_provider_id=explicit)
         except ZCodeProviderConfigError:
-            # Return an adapter so the malformed config becomes a visible source error
-            # instead of silently looking disabled.
             return cls(
                 path,
                 provider_id=explicit,
@@ -177,23 +198,37 @@ class CommandCodeZCodeProviderAdapter:
         usage = self._parse_credits(credits_root)
 
         plan: str | None = None
+        plan_limit: float | None = None
         try:
             subscription_status, subscription_body = self._transport(
                 _SUBSCRIPTIONS_PATH,
                 provider.api_key,
             )
             if subscription_status in (401, 403):
-                # Credits already authenticated successfully; subscription enrichment
-                # is not allowed to turn a valid snapshot into a fabricated auth error.
                 subscription_status = 0
             if 200 <= subscription_status < 300:
-                plan = self._parse_plan(_decode_json(subscription_body, label="subscription"))
+                plan, plan_limit = self._parse_plan(
+                    _decode_json(subscription_body, label="subscription")
+                )
         except PublicAdapterError:
-            # Plan lookup is best-effort enrichment. Credits/windows remain authoritative.
             plan = None
+            plan_limit = None
+
+        credit = usage.credit
+        if (
+            credit is not None
+            and plan_limit is not None
+            and credit.remaining is not None
+            and credit.remaining <= plan_limit
+        ):
+            credit = CreditBalance(
+                remaining=credit.remaining,
+                limit=plan_limit,
+                unit=credit.unit,
+            )
 
         return CommandCodePayload(
-            usage=UsageSummary(plan=plan, credit=usage.credit, windows=usage.windows)
+            usage=UsageSummary(plan=plan, credit=credit, windows=usage.windows)
         )
 
     @staticmethod
@@ -214,7 +249,8 @@ class CommandCodeZCodeProviderAdapter:
         if monthly is None or monthly < 0:
             raise PublicAdapterError("Unsupported CommandCode credits response")
         purchased = _number(credits.get("purchasedCredits")) or 0.0
-        remaining = monthly + max(0.0, purchased)
+        free = _number(credits.get("freeCredits")) or 0.0
+        remaining = monthly + max(0.0, purchased) + max(0.0, free)
 
         limits = root.get("windowLimits")
         if not isinstance(limits, dict):
@@ -234,15 +270,16 @@ class CommandCodeZCodeProviderAdapter:
         )
 
     @staticmethod
-    def _parse_plan(root: dict[str, Any]) -> str | None:
+    def _parse_plan(root: dict[str, Any]) -> tuple[str | None, float | None]:
         if root.get("success") is False:
-            return None
+            return None, None
         data = root.get("data")
         if data is None:
-            return None
+            return None, None
         if not isinstance(data, dict):
             raise PublicAdapterError("Unsupported CommandCode subscription response")
-        plan = data.get("planId")
-        if not isinstance(plan, str) or not plan.strip():
-            return None
-        return plan.strip()[:128]
+        plan_id = data.get("planId")
+        if not isinstance(plan_id, str) or not plan_id.strip():
+            return None, None
+        normalized = plan_id.strip()[:128]
+        return _PLAN_LABELS.get(normalized, normalized), _PLAN_CREDITS.get(normalized)

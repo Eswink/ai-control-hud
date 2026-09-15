@@ -30,7 +30,7 @@ def _config(path: Path, *, base_url: str = "https://api.commandcode.ai/provider/
     return secret
 
 
-def test_collects_credits_windows_and_plan_from_zcode_key(tmp_path: Path) -> None:
+def test_collects_full_credits_windows_and_known_plan(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     secret = _config(path)
     calls: list[tuple[str, str]] = []
@@ -40,7 +40,11 @@ def test_collects_credits_windows_and_plan_from_zcode_key(tmp_path: Path) -> Non
         if endpoint.endswith("/credits"):
             return 200, json.dumps(
                 {
-                    "credits": {"monthlyCredits": 53.72, "purchasedCredits": 5.0},
+                    "credits": {
+                        "monthlyCredits": 53.72,
+                        "purchasedCredits": 5.0,
+                        "freeCredits": 1.0,
+                    },
                     "windowLimits": {
                         "fiveHour": {"used": 11.34, "cap": 14.0, "resetAt": 1789490000000},
                         "weekly": {"used": 22.05, "cap": 35.0, "resetAt": "2026-09-19T06:00:00Z"},
@@ -48,7 +52,14 @@ def test_collects_credits_windows_and_plan_from_zcode_key(tmp_path: Path) -> Non
                 }
             ).encode()
         return 200, json.dumps(
-            {"success": True, "data": {"planId": "pro", "status": "active"}}
+            {
+                "success": True,
+                "data": {
+                    "planId": "individual-goat",
+                    "status": "active",
+                    "currentPeriodEnd": "2026-10-01T00:00:00Z",
+                },
+            }
         ).encode()
 
     payload = asyncio.run(
@@ -59,15 +70,42 @@ def test_collects_credits_windows_and_plan_from_zcode_key(tmp_path: Path) -> Non
         ("/alpha/billing/credits", secret),
         ("/alpha/billing/subscriptions", secret),
     ]
-    assert payload.usage.plan == "pro"
+    assert payload.usage.plan == "GOAT"
     assert payload.usage.credit is not None
-    assert payload.usage.credit.remaining == pytest.approx(58.72)
-    assert payload.usage.credit.limit is None
+    assert payload.usage.credit.remaining == pytest.approx(59.72)
+    assert payload.usage.credit.limit == pytest.approx(70.0)
     assert payload.usage.credit.unit == "USD"
     assert [window.name for window in payload.usage.windows] == ["5h", "weekly"]
     assert payload.usage.windows[0].used_percent == pytest.approx(81.0)
     assert payload.usage.windows[0].reset_at is not None
     assert payload.usage.windows[1].used_percent == pytest.approx(63.0)
+
+
+def test_extra_credit_can_exceed_plan_allowance_without_invalid_balance(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    _config(path)
+
+    def transport(endpoint: str, _api_key: str) -> tuple[int, bytes]:
+        if endpoint.endswith("/credits"):
+            return 200, json.dumps(
+                {
+                    "credits": {
+                        "monthlyCredits": 65.0,
+                        "purchasedCredits": 10.0,
+                        "freeCredits": 2.0,
+                    }
+                }
+            ).encode()
+        return 200, json.dumps(
+            {"success": True, "data": {"planId": "individual-goat"}}
+        ).encode()
+
+    payload = asyncio.run(CommandCodeZCodeProviderAdapter(path, transport=transport).collect())
+
+    assert payload.usage.plan == "GOAT"
+    assert payload.usage.credit is not None
+    assert payload.usage.credit.remaining == pytest.approx(77.0)
+    assert payload.usage.credit.limit is None
 
 
 def test_subscription_failure_keeps_valid_credit_snapshot(tmp_path: Path) -> None:
@@ -85,6 +123,22 @@ def test_subscription_failure_keeps_valid_credit_snapshot(tmp_path: Path) -> Non
     assert payload.usage.plan is None
     assert payload.usage.credit is not None
     assert payload.usage.credit.remaining == 10
+
+
+def test_unknown_plan_is_preserved_without_fabricated_allowance(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    _config(path)
+
+    def transport(endpoint: str, _: str) -> tuple[int, bytes]:
+        if endpoint.endswith("/credits"):
+            return 200, b'{"credits":{"monthlyCredits":4}}'
+        return 200, b'{"success":true,"data":{"planId":"future-plan"}}'
+
+    payload = asyncio.run(CommandCodeZCodeProviderAdapter(path, transport=transport).collect())
+
+    assert payload.usage.plan == "future-plan"
+    assert payload.usage.credit is not None
+    assert payload.usage.credit.limit is None
 
 
 def test_credits_auth_failure_is_not_zero_balance(tmp_path: Path) -> None:
