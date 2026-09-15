@@ -189,7 +189,7 @@ def test_composite_prefers_live_goal_over_old_failed_index(tmp_path: Path) -> No
     ]
 
 
-def test_stale_terminal_goal_falls_back_to_task_index(tmp_path: Path) -> None:
+def test_stale_terminal_goal_falls_back_to_recent_task_index(tmp_path: Path) -> None:
     runtime_db = tmp_path / "db.sqlite"
     task_db = tmp_path / "tasks-index.sqlite"
     old_heartbeat = _ms_now() - (3 * 60 * 60 * 1000)
@@ -202,6 +202,12 @@ def test_stale_terminal_goal_falls_back_to_task_index(tmp_path: Path) -> None:
     finally:
         connection.close()
     _create_task_index(task_db)
+    connection = sqlite3.connect(task_db)
+    try:
+        connection.execute("UPDATE tasks SET updated_at=?", (_ms_now(),))
+        connection.commit()
+    finally:
+        connection.close()
 
     adapter = ZCodeCompositeAdapter(
         ZCodeGoalAdapter(runtime_db, heartbeat_seconds=60, recent_terminal_seconds=60),
