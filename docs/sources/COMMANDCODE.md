@@ -1,44 +1,87 @@
-# Command Code source evidence
+# Command Code source strategy
 
-Status: discovery v1 did not find a usable local source on the target Windows machine; discovery v2 is required before production adapter implementation.
+## Deployment architecture
 
-## What the first target-machine report proved
+The target machine does **not** consume Command Code through the Command Code CLI. Command Code is configured as a third-party model provider inside ZCode.
 
-- Platform: native Windows 10 / AMD64.
-- No Command Code CLI was detected by the v1 name list.
-- No `~/.commandcode` (or other configured Command Code root) was detected.
-- No auth/config JSON file was discovered.
-
-The v1 CLI detector did **not** include the official native-Windows alias `cmdc`, so `cli: null` is not sufficient evidence that Command Code is absent.
-
-## Current official behavior relevant to Windows
-
-- Native Windows uses `cmdc`; the full executable name `command-code` is also supported.
-- `cmdc status --json` is an official automation-friendly authentication-status command.
-- Authentication may come from `~/.commandcode/auth.json` or the `COMMAND_CODE_API_KEY` environment variable.
-- `/usage` is the official interactive view for credits, plan, 5-hour usage, weekly usage and reset information.
-
-## Discovery v2
-
-The v2 probe adds:
-
-- executable detection order: `cmdc`, `command-code`, `commandcode`, `cmdcode`;
-- presence-only reporting for `COMMAND_CODE_API_KEY` (the value is never emitted);
-- optional `--commandcode-status`, which runs `cmdc status --json` (or equivalent) and records only JSON key/type shape, never values.
-
-Run on the target Windows machine:
-
-```cmd
-python -m tools.discovery --commandcode-status
+```text
+ZCode
+  -> ~/.zcode/v2/config.json provider entry
+  -> OpenAI/Anthropic-compatible Command Code endpoint
+  -> Command Code plan/credits
 ```
 
-Then review and share `.local\discovery-report.json`.
+ZCode's current provider configuration recognizes connection fields such as `options.apiKey`, `options.baseURL`, `options.apiKeyRequired`, and `options.headers`. The API key remains local to the development PC.
 
-## Production-adapter decision gate
+## Provider detection
 
-Do not bind the backend to an undocumented billing transport until the target installation proves which auth source is actually in use. Once discovery v2 establishes the local CLI/auth source, the next probe will verify a usage transport while preserving these rules:
+`python -m tools.provider_discovery` produces a secret-free view of the ZCode provider config. It exposes only:
 
-- credential values never leave the machine or enter git;
-- probe output contains only endpoint result status, field names/types and explicitly approved numeric usage fields;
-- Android never receives or stores Command Code credentials;
-- internal/unstable endpoints remain isolated behind `CommandCodeAdapter`.
+- provider id/name;
+- enabled state;
+- protocol/kind when present;
+- base URL without query/fragment/userinfo;
+- host;
+- API-key presence boolean;
+- header names only;
+- model ids;
+- whether the host is the official `api.commandcode.ai` endpoint.
+
+It never writes API-key values or header values.
+
+The production adapter auto-enables only when the provider host is exactly `api.commandcode.ai`. A proxy/custom endpoint must be selected explicitly with `HUD_COMMANDCODE_PROVIDER_ID` after manual verification.
+
+## Billing retrieval
+
+Command Code's documented Provider API is the supported model-traffic surface. The usage dashboard still requires plan/credit/window data that is not part of the public Provider API contract.
+
+Current community evidence (August/September 2026) shows API-key access to:
+
+- `GET https://api.commandcode.ai/alpha/billing/credits`
+- `GET https://api.commandcode.ai/alpha/billing/subscriptions`
+
+These paths are treated as **unstable implementation details**. They exist only inside `CommandCodeZCodeProviderAdapter`; the Android/canonical API does not know their paths or raw payloads.
+
+Credits are the required source. Subscription lookup is best-effort enrichment so a subscription endpoint outage does not discard valid credit/window data.
+
+## Normalized mapping
+
+Current adapter mapping:
+
+- `credits.monthlyCredits + max(credits.purchasedCredits, 0)` -> `credit.remaining`;
+- credit unit -> `USD`;
+- `windowLimits.fiveHour.used / cap` -> `5h.usedPercent`;
+- `windowLimits.fiveHour.resetAt` -> `5h.resetAt`;
+- `windowLimits.weekly.used / cap` -> `weekly.usedPercent`;
+- `windowLimits.weekly.resetAt` -> `weekly.resetAt`;
+- successful subscription `data.planId` -> `plan`.
+
+No monthly `credit.limit` is fabricated because the billing payload/plan catalog semantics have not yet been verified on the target account.
+
+## Failure semantics
+
+- provider missing -> source disabled until a provider is explicitly selected or detected;
+- provider exists but key missing -> explicit error;
+- 401 credits response -> authentication failed;
+- 403 credits response -> billing access denied;
+- other non-2xx credits response -> billing API unavailable;
+- malformed/changed credits schema -> explicit unsupported response error;
+- later collection failure after a successful snapshot -> runtime preserves last-known-good data as `stale`.
+
+No failure is converted to zero credits or zero usage.
+
+## Target-machine verification
+
+Run:
+
+```cmd
+python -m tools.provider_discovery
+```
+
+Review and share `.local\provider-discovery.json`. If the provider host is `api.commandcode.ai`, normal backend startup can auto-enable the adapter. If the provider is a local proxy instead, verify that its configured key is still a Command Code API key before setting `HUD_COMMANDCODE_PROVIDER_ID`.
+
+References:
+
+- ZCode model/provider configuration: https://zcode.z.ai/en/docs/configuration
+- Command Code Provider API: https://commandcode.ai/docs/provider
+- Command Code Studio/API keys: https://commandcode.ai/docs/studio
