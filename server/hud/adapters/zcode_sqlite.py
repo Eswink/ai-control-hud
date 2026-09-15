@@ -62,10 +62,8 @@ def _workspace_label(path: object, key: object) -> str | None:
 def _canonical_id(workspace_key: object, task_id: object) -> str:
     workspace = "" if workspace_key is None else str(workspace_key)
     task = "" if task_id is None else str(task_id)
-    combined = f"{workspace}:{task}".strip(":")
-    if 0 < len(combined) <= 256:
-        return combined
-    return hashlib.sha256(f"{workspace}\0{task}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{workspace}\0{task}".encode("utf-8")).hexdigest()
+    return f"zcode-{digest[:32]}"
 
 
 def _timestamp(value: object) -> datetime | None:
@@ -78,10 +76,9 @@ def _timestamp(value: object) -> datetime | None:
     if numeric <= 0:
         return None
 
-    # ZCode's schema exposes integer timestamps but the discovery report does not
-    # prove their unit. Accept normal Unix seconds/milliseconds/microseconds by
-    # magnitude so schema-compatible releases remain readable without guessing a
-    # single fixed unit.
+    # ZCode's schema exposes integer timestamps but the first discovery report did
+    # not prove their unit. Accept normal Unix seconds/milliseconds/microseconds by
+    # magnitude until the explicit value-level probe records the target unit.
     if numeric > 100_000_000_000_000:
         numeric /= 1_000_000
     elif numeric > 100_000_000_000:
@@ -100,6 +97,15 @@ def _positive_limit(raw: str | None, default: int = 50) -> int:
     except ValueError:
         return default
     return max(1, min(value, 500))
+
+
+def _canonical_summary(status_rows: list[sqlite3.Row]) -> ZCodeSummary:
+    counts = {"running": 0, "waiting": 0, "failed": 0, "completed": 0}
+    for row in status_rows:
+        canonical = _normalize_status(row["task_status"])
+        if canonical in counts:
+            counts[canonical] += int(row["count"])
+    return ZCodeSummary(**counts)
 
 
 class ZCodeSQLiteAdapter:
@@ -142,6 +148,14 @@ class ZCodeSQLiteAdapter:
                     """,
                     (self.task_limit,),
                 ).fetchall()
+                status_rows = connection.execute(
+                    """
+                    SELECT task_status, COUNT(*) AS count
+                    FROM tasks
+                    WHERE archived = 0 AND deleted = 0
+                    GROUP BY task_status
+                    """
+                ).fetchall()
             finally:
                 connection.close()
         except PublicAdapterError:
@@ -149,15 +163,9 @@ class ZCodeSQLiteAdapter:
         except sqlite3.Error as error:
             raise PublicAdapterError("ZCode task index read failed") from error
 
-        tasks = [self._row_to_task(row) for row in rows]
-        counts = {"running": 0, "waiting": 0, "failed": 0, "completed": 0}
-        for task in tasks:
-            if task.status in counts:
-                counts[task.status] += 1
-
         return ZCodePayload(
-            summary=ZCodeSummary(**counts),
-            tasks=tasks,
+            summary=_canonical_summary(status_rows),
+            tasks=[self._row_to_task(row) for row in rows],
         )
 
     @staticmethod
