@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -37,11 +37,20 @@ class ZCodeProviderRecord:
         return self.host == "api.commandcode.ai"
 
 
-def default_zcode_provider_config() -> Path:
+def default_zcode_provider_configs() -> tuple[Path, ...]:
     configured = os.getenv("HUD_ZCODE_CONFIG")
     if configured:
-        return Path(configured).expanduser()
-    return Path.home() / ".zcode" / "v2" / "config.json"
+        return (Path(configured).expanduser(),)
+    home = Path.home() / ".zcode"
+    return (
+        home / "v2" / "config.json",
+        home / "cli" / "config.json",
+    )
+
+
+def default_zcode_provider_config() -> Path:
+    """Backward-compatible primary desktop provider config path."""
+    return default_zcode_provider_configs()[0]
 
 
 def _clean_string(value: Any, *, max_length: int = 500) -> str | None:
@@ -124,6 +133,36 @@ def find_commandcode_provider(
     return None
 
 
+def find_commandcode_provider_across_configs(
+    paths: Iterable[Path | str] | None = None,
+    *,
+    explicit_provider_id: str | None = None,
+) -> tuple[Path, ZCodeProviderRecord] | None:
+    candidates = tuple(Path(path).expanduser() for path in (paths or default_zcode_provider_configs()))
+    saw_readable = False
+    last_error: ZCodeProviderConfigError | None = None
+    for config_path in candidates:
+        if not config_path.is_file():
+            continue
+        try:
+            providers = load_zcode_providers(config_path)
+        except ZCodeProviderConfigError as exc:
+            last_error = exc
+            continue
+        saw_readable = True
+        if explicit_provider_id:
+            for provider in providers:
+                if provider.provider_id == explicit_provider_id:
+                    return config_path, provider
+        else:
+            for provider in providers:
+                if provider.enabled and provider.is_official_commandcode:
+                    return config_path, provider
+    if not saw_readable and last_error is not None:
+        raise last_error
+    return None
+
+
 def sanitize_base_url(value: str | None) -> str | None:
     if not value:
         return None
@@ -172,6 +211,15 @@ def sanitized_provider_summary(path: Path | str | None = None) -> dict[str, Any]
         for item in providers
     ]
     return result
+
+
+def sanitized_provider_summaries(
+    paths: Iterable[Path | str] | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        sanitized_provider_summary(Path(path).expanduser())
+        for path in (paths or default_zcode_provider_configs())
+    ]
 
 
 def _display_path(path: Path) -> str:
