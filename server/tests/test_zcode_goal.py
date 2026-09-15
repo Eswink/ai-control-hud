@@ -211,3 +211,66 @@ def test_stale_terminal_goal_falls_back_to_task_index(tmp_path: Path) -> None:
 
     assert payload.summary.failed == 1
     assert payload.tasks[0].title == "old failed task"
+
+
+def test_stale_running_goal_is_not_live_even_with_running_todo(tmp_path: Path) -> None:
+    runtime_db = tmp_path / "db.sqlite"
+    _create_runtime_db(runtime_db)
+    stale = _ms_now() - (7 * 24 * 60 * 60 * 1000)
+
+    connection = sqlite3.connect(runtime_db)
+    try:
+        connection.execute(
+            "INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "session-stale",
+                r"D:\\d\\research-system",
+                r"D:\\d\\research-system",
+                "old stale goal",
+                None,
+                None,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO session_target VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "session-stale",
+                "target-old",
+                "old objective",
+                "active",
+                None,
+                1,
+                999,
+                stale,
+                stale,
+                "old stale goal",
+                "old-input",
+                stale,
+                stale,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO todo VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "session-stale",
+                "old running todo",
+                "running",
+                "normal",
+                0,
+                stale,
+                stale,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    payload = asyncio.run(ZCodeGoalAdapter(runtime_db, heartbeat_seconds=120).collect_optional())
+
+    assert payload is not None
+    assert payload.summary.running == 1
+    assert [task.title for task in payload.tasks] == [
+        "Goal 模式迭代与 collector-quality 持续失败取证"
+    ]
