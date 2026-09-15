@@ -1,68 +1,108 @@
 # ZCode source evidence
 
-Status: partially verified against a sanitized discovery report from the target Windows machine (2026-09-15).
+Status: verified on the target Windows machine through live API comparison with the ZCode Desktop Goal UI (2026-09-15).
 
 ## Verified local sources
 
-The target machine reports two ZCode SQLite databases:
+The target machine exposes two useful SQLite databases:
 
-- `~/.zcode/cli/db/db.sqlite`
-- `~/.zcode/v2/tasks-index.sqlite`
+- `~/.zcode/cli/db/db.sqlite` — authoritative source for live Goal/session state;
+- `~/.zcode/v2/tasks-index.sqlite` — best-effort historical/task-index fallback.
 
-The CLI binary was not found by the first discovery pass, so v1 deliberately does not depend on invoking ZCode.
+The production HUD does not depend on invoking a ZCode CLI binary.
 
-## Selected v1 source
+## Primary live source: runtime DB
 
-`~/.zcode/v2/tasks-index.sqlite`, table `tasks`.
+The production adapter reads `~/.zcode/cli/db/db.sqlite` in SQLite read-only mode.
 
-Verified columns used by the adapter:
+Verified tables/columns used for Goal mode:
 
-- `workspace_key` (TEXT, composite primary key)
-- `workspace_path` (TEXT)
-- `task_id` (TEXT, composite primary key)
-- `title` (TEXT)
-- `task_status` (TEXT, nullable)
-- `updated_at` (INTEGER)
-- `pinned` (INTEGER)
-- `archived` (INTEGER)
-- `deleted` (INTEGER)
+### `session_target`
 
-The adapter opens the database with SQLite URI `mode=ro`, verifies this schema before querying, filters archived/deleted records, orders pinned/recent tasks first, and applies a bounded result limit.
+- `session_id`
+- `objective`
+- `status`
+- `time_used_seconds`
+- `time_updated`
+- `summary_title`
+- `active_run_started_at`
+- `active_run_last_seen_at`
+
+### `todo`
+
+- `session_id`
+- `content`
+- `status`
+- `position`
+
+### `session`
+
+- `id`
+- `directory`
+- `path`
+- `title`
+- `summary_additions`
+- `summary_deletions`
+
+The adapter also uses `model_usage` for provider/model diagnostics; credentials are not read from this table.
+
+## Live-state rules
+
+A Goal is considered live only when its `active_run_last_seen_at` heartbeat is fresh. The default freshness window is 120 seconds and can be adjusted with `HUD_ZCODE_GOAL_HEARTBEAT_SECONDS`.
+
+Historical sessions are not allowed to become `running` merely because an old `session_target.status` or `todo.status` still contains a running-like value. This rule was added after target-machine validation showed old sessions from several days earlier retaining stale running markers.
+
+When no fresh Goal exists, the composite adapter falls back to `~/.zcode/v2/tasks-index.sqlite`.
 
 ## Canonical mapping
 
 | Canonical field | ZCode source | Status |
 | --- | --- | --- |
-| `id` | stable composition/hash of `workspace_key` + `task_id` | derived |
-| `title` | `title` | verified |
-| `workspace` | basename of `workspace_path`, fallback `workspace_key` | derived/privacy-preserving |
-| `status` | conservative mapping of `task_status` | partially verified |
-| `updatedAt` | `updated_at`, converted by Unix timestamp magnitude | derived; exact unit not yet sampled |
-| `startedAt` | unavailable in selected table | unavailable in v1 |
-| `durationSeconds` | unavailable in selected table | unavailable in v1 |
-| `activity` | unavailable in selected table | unavailable in v1 |
-| `changes` | not joined across databases in v1 | unavailable in v1 |
+| `id` | SHA-256-derived stable ID from `session_id` | derived/privacy-preserving |
+| `title` | `session.title`, then `session_target.summary_title`, then `objective` | verified |
+| `workspace` | basename of `session.path` / `session.directory` | derived/privacy-preserving |
+| `status` | fresh heartbeat + target/todo state | verified on live Goal |
+| `startedAt` | `session_target.active_run_started_at` | verified |
+| `updatedAt` | `active_run_last_seen_at`, fallback `time_updated` | verified |
+| `durationSeconds` | `session_target.time_used_seconds`, fallback elapsed start time | verified |
+| `activity` | first running/waiting `todo.content` | verified |
+| `changes` | `session.summary_additions` / `summary_deletions` when present | schema verified; may be null |
 
-Unexpected `task_status` values map to `unknown`; they never silently become `completed` or `failed`.
+Timestamp conversion accepts Unix seconds/milliseconds/microseconds by magnitude because ZCode stores integer timestamps across local tables.
 
-## Additional verified tables for later enrichment
+## Target-machine validation
 
-`~/.zcode/cli/db/db.sqlite` exposes useful candidates including:
+The live HUD API was compared with the running ZCode Desktop Goal panel. It correctly resolved the current Goal title, workspace, current cycle/todo activity and a single `running` Goal. Older sessions that still contained running-like database values were filtered once heartbeat freshness was enforced.
 
-- `session`: title/workspace metadata plus `summary_additions`, `summary_deletions`, `time_created`, `time_updated`;
-- `session_target`: target status, token/time budgets, active run timestamps;
-- `model_usage`: request status, model/provider, timings and token counts;
-- `tool_usage`: tool name/status/timings/exit code;
-- `turn_usage`: per-turn model/tool/token aggregate data;
-- workflow tables for workflow activity/run state.
+## Historical fallback: task index
 
-These are intentionally not joined into the task list yet because the first discovery pass did not read rows and therefore did not prove the cross-table/task identifiers. A later evidence pass can add enrichment without changing the Android contract.
+`~/.zcode/v2/tasks-index.sqlite`, table `tasks`, remains available as a fallback for non-Goal/history state.
+
+Verified fields include:
+
+- `workspace_key`
+- `workspace_path`
+- `task_id`
+- `title`
+- `task_status`
+- `updated_at`
+- `pinned`
+- `archived`
+- `deleted`
+
+The adapter opens this database with SQLite URI `mode=ro`, verifies schema before querying, filters archived/deleted rows and hashes raw IDs before returning them to Android.
+
+The task index is explicitly not treated as an authoritative live-running source because target-machine testing showed it can lag behind an actively running Goal.
+
+## Provider/model evidence
+
+`model_usage` records `session_id`, `provider_id`, `model_id`, request status/timing and token counts. The sanitized discovery tool can correlate the freshest active Goal session to its actual provider/model without exporting the session ID, prompts, messages or credentials.
 
 ## Failure behavior
 
-- missing task index -> source error `ZCode task index not found`;
-- missing required table/columns -> `Unsupported ZCode task index schema`;
-- SQLite read error -> sanitized `ZCode task index read failed`;
-- runtime retains last-known-good data as `stale` after a later collection failure.
+- unsupported Goal schema -> fall back to task index;
+- runtime SQLite read error -> sanitized source error / last-known-good becomes `stale`;
+- missing task-index schema -> explicit unsupported-schema error;
+- no live Goal -> task-index fallback rather than fabricated running state.
 
-No task message/prompt body is read by this adapter.
+All reads are read-only. The adapter does not modify ZCode state or emit provider credentials to the canonical API or Android.
