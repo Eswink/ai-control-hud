@@ -88,8 +88,28 @@ def test_task_limit_does_not_truncate_summary_counts(tmp_path: Path) -> None:
     assert len(payload.tasks) == 2
     assert payload.summary.running == 1
     assert payload.summary.waiting == 1
-    # This task is outside the two displayed rows; summary must still count it.
     assert payload.summary.completed == 1
+
+
+def test_stale_task_index_rows_are_hidden_from_realtime_hud(tmp_path: Path) -> None:
+    db = tmp_path / "tasks-index.sqlite"
+    _create_task_index(db)
+    connection = sqlite3.connect(db)
+    try:
+        connection.execute("UPDATE tasks SET updated_at = ?", (1_700_000_000_000,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    payload = asyncio.run(
+        ZCodeSQLiteAdapter(db, task_max_age_seconds=3_600).collect()
+    )
+
+    assert payload.tasks == []
+    assert payload.summary.running == 0
+    assert payload.summary.waiting == 0
+    assert payload.summary.failed == 0
+    assert payload.summary.completed == 0
 
 
 def test_missing_or_changed_schema_fails_visibly(tmp_path: Path) -> None:
