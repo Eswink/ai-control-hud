@@ -5,6 +5,7 @@ from pathlib import Path
 
 from server.hud.zcode_provider import (
     find_commandcode_provider,
+    find_commandcode_provider_across_configs,
     load_zcode_providers,
     sanitized_provider_summary,
 )
@@ -95,6 +96,34 @@ def test_explicit_provider_id_can_select_nonofficial_proxy(tmp_path: Path) -> No
     provider = find_commandcode_provider(path, explicit_provider_id="cc-proxy")
     assert provider is not None
     assert provider.host == "127.0.0.1"
+
+
+def test_across_configs_finds_provider_in_cli_when_desktop_has_only_builtins(tmp_path: Path) -> None:
+    desktop = tmp_path / "v2.json"
+    cli = tmp_path / "cli.json"
+    desktop.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "builtin:zai": {
+                        "enabled": True,
+                        "kind": "anthropic",
+                        "options": {"baseURL": "https://api.z.ai/api/anthropic"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    secret = _write_config(cli)
+
+    found = find_commandcode_provider_across_configs([desktop, cli])
+
+    assert found is not None
+    path, provider = found
+    assert path == cli
+    assert provider.provider_id == "command-code"
+    assert provider.api_key == secret
 
 
 def test_missing_provider_section_is_empty(tmp_path: Path) -> None:
