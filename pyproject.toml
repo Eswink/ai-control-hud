@@ -27,4 +27,4 @@ namespaces = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["server/tests"]
+testpaths = ["server/tests", "tools/tests"]
