@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "server": {"version": "0.1.0-dev", "time": "2026-09-15T21:33:00+08:00", "uptimeSeconds": 1414},
+  "overall": {"status": "degraded"},
+  "zcode": {
+    "health": {"status": "error", "observedAt": "2026-09-15T21:33:00+08:00", "lastSuccessAt": null, "message": "ZCode source unavailable"},
+    "summary": null,
+    "tasks": null
+  },
+  "commandCode": {
+    "health": {"status": "ok", "observedAt": "2026-09-15T21:32:30+08:00", "lastSuccessAt": "2026-09-15T21:32:30+08:00", "message": null},
+    "usage": {"plan": "example-plan", "credit": {"remaining": 53.72, "limit": 70.0, "unit": "USD"}, "windows": []}
+  }
+}

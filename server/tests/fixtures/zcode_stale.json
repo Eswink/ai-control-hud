@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "server": {"version": "0.1.0-dev", "time": "2026-09-15T21:31:00+08:00", "uptimeSeconds": 1294},
+  "overall": {"status": "degraded"},
+  "zcode": {
+    "health": {"status": "stale", "observedAt": "2026-09-15T21:31:00+08:00", "lastSuccessAt": "2026-09-15T21:29:59+08:00", "message": "ZCode source has not refreshed recently"},
+    "summary": {"running": 1, "waiting": 1, "failed": 0, "completed": 3},
+    "tasks": [{"id": "task-running-1", "title": "Refactor agent pipeline", "workspace": "backend", "status": "running", "startedAt": "2026-09-15T21:10:00+08:00", "updatedAt": "2026-09-15T21:29:58+08:00", "durationSeconds": 1198, "activity": "pytest tests/api", "changes": {"additions": 428, "deletions": 103}}]
+  },
+  "commandCode": {
+    "health": {"status": "ok", "observedAt": "2026-09-15T21:30:30+08:00", "lastSuccessAt": "2026-09-15T21:30:30+08:00", "message": null},
+    "usage": {"plan": "example-plan", "credit": {"remaining": 53.72, "limit": 70.0, "unit": "USD"}, "windows": [{"name": "5h", "usedPercent": 81.0, "resetAt": "2026-09-15T23:41:00+08:00"}]}
+  }
+}
