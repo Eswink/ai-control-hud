@@ -178,7 +178,7 @@ def build_report(
                     }
                 )
     return {
-        "reportVersion": 3,
+        "reportVersion": 2,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "privacy": {
             "networkCalls": False,
