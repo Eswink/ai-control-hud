@@ -117,6 +117,7 @@ class CommandCodeZCodeProviderAdapter:
         config_path: Path | str | None = None,
         *,
         provider_id: str | None = None,
+        allow_nonofficial_provider: bool = False,
         transport: BillingTransport | None = None,
     ) -> None:
         self.config_path = (
@@ -125,6 +126,7 @@ class CommandCodeZCodeProviderAdapter:
             else default_zcode_provider_config()
         )
         self.provider_id = provider_id
+        self.allow_nonofficial_provider = allow_nonofficial_provider
         self._transport = transport or _default_transport
 
     @classmethod
@@ -138,10 +140,18 @@ class CommandCodeZCodeProviderAdapter:
         except ZCodeProviderConfigError:
             # Return an adapter so the malformed config becomes a visible source error
             # instead of silently looking disabled.
-            return cls(path, provider_id=explicit)
+            return cls(
+                path,
+                provider_id=explicit,
+                allow_nonofficial_provider=bool(explicit),
+            )
         if provider is None:
             return None
-        return cls(path, provider_id=provider.provider_id)
+        return cls(
+            path,
+            provider_id=provider.provider_id,
+            allow_nonofficial_provider=bool(explicit),
+        )
 
     async def collect(self) -> CommandCodePayload:
         return await asyncio.to_thread(self._collect_sync)
@@ -158,7 +168,7 @@ class CommandCodeZCodeProviderAdapter:
             raise PublicAdapterError("CommandCode provider not found in ZCode")
         if not provider.api_key:
             raise PublicAdapterError("CommandCode provider API key missing in ZCode")
-        if not provider.is_official_commandcode and not self.provider_id:
+        if not provider.is_official_commandcode and not self.allow_nonofficial_provider:
             raise PublicAdapterError("CommandCode provider endpoint is not verified")
 
         credits_status, credits_body = self._transport(_CREDITS_PATH, provider.api_key)
