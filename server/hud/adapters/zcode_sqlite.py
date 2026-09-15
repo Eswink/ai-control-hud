@@ -75,10 +75,6 @@ def _timestamp(value: object) -> datetime | None:
         return None
     if numeric <= 0:
         return None
-
-    # ZCode's schema exposes integer timestamps but the first discovery report did
-    # not prove their unit. Accept normal Unix seconds/milliseconds/microseconds by
-    # magnitude until the explicit value-level probe records the target unit.
     if numeric > 100_000_000_000_000:
         numeric /= 1_000_000
     elif numeric > 100_000_000_000:
@@ -99,6 +95,16 @@ def _positive_limit(raw: str | None, default: int = 50) -> int:
     return max(1, min(value, 500))
 
 
+def _positive_seconds(raw: str | None, default: int = 86_400) -> int:
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(60, min(value, 30 * 86_400))
+
+
 def _canonical_summary(status_rows: list[sqlite3.Row]) -> ZCodeSummary:
     counts = {"running": 0, "waiting": 0, "failed": 0, "completed": 0}
     for row in status_rows:
@@ -109,11 +115,20 @@ def _canonical_summary(status_rows: list[sqlite3.Row]) -> ZCodeSummary:
 
 
 class ZCodeSQLiteAdapter:
-    """Read the ZCode v2 task index without modifying ZCode state."""
+    """Read recent ZCode v2 task-index entries without modifying ZCode state."""
 
-    def __init__(self, db_path: Path | str | None = None, *, task_limit: int | None = None):
+    def __init__(
+        self,
+        db_path: Path | str | None = None,
+        *,
+        task_limit: int | None = None,
+        task_max_age_seconds: int | None = None,
+    ):
         self.db_path = Path(db_path).expanduser() if db_path is not None else _default_db_path()
         self.task_limit = task_limit or _positive_limit(os.getenv("HUD_ZCODE_TASK_LIMIT"))
+        self.task_max_age_seconds = task_max_age_seconds or _positive_seconds(
+            os.getenv("HUD_ZCODE_TASK_MAX_AGE_SECONDS")
+        )
 
     @classmethod
     def from_environment(cls) -> "ZCodeSQLiteAdapter | None":
@@ -130,6 +145,9 @@ class ZCodeSQLiteAdapter:
         if not self.db_path.is_file():
             raise PublicAdapterError("ZCode task index not found")
 
+        cutoff_ms = int(
+            (datetime.now(timezone.utc).timestamp() - self.task_max_age_seconds) * 1000
+        )
         path = self.db_path.resolve().as_posix()
         uri = f"file:{quote(path, safe='/:')}?mode=ro"
         try:
@@ -142,19 +160,20 @@ class ZCodeSQLiteAdapter:
                     SELECT workspace_key, workspace_path, task_id, title,
                            task_status, updated_at, pinned, archived, deleted
                     FROM tasks
-                    WHERE archived = 0 AND deleted = 0
+                    WHERE archived = 0 AND deleted = 0 AND updated_at >= ?
                     ORDER BY pinned DESC, updated_at DESC
                     LIMIT ?
                     """,
-                    (self.task_limit,),
+                    (cutoff_ms, self.task_limit),
                 ).fetchall()
                 status_rows = connection.execute(
                     """
                     SELECT task_status, COUNT(*) AS count
                     FROM tasks
-                    WHERE archived = 0 AND deleted = 0
+                    WHERE archived = 0 AND deleted = 0 AND updated_at >= ?
                     GROUP BY task_status
-                    """
+                    """,
+                    (cutoff_ms,),
                 ).fetchall()
             finally:
                 connection.close()
