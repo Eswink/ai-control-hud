@@ -21,6 +21,7 @@ import android.widget.TextView;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -286,7 +287,7 @@ public final class MainActivity extends Activity {
 
         taskEmpty.setVisibility(View.GONE);
         ArrayList<StateSnapshot.TaskItem> display = new ArrayList<>(tasks);
-        display.sort((left, right) -> Integer.compare(taskPriority(left.status), taskPriority(right.status)));
+        Collections.sort(display, (left, right) -> Integer.compare(taskPriority(left.status), taskPriority(right.status)));
 
         int visibleCount = Math.min(MAX_TASK_ROWS, display.size());
         ensureTaskRows(visibleCount);
