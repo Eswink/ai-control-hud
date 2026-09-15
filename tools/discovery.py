@@ -118,12 +118,17 @@ def _walk_limited(root: Path, suffixes: set[str]) -> list[Path]:
     return found
 
 
+def _sqlite_readonly(path: Path) -> sqlite3.Connection:
+    uri = f"file:{quote(str(path.expanduser().resolve()))}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=1)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def sqlite_schema(path: Path) -> dict[str, Any]:
     report: dict[str, Any] = {"path": display_path(path), "readOnly": True}
     try:
-        uri = f"file:{quote(str(path.expanduser().resolve()))}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=1)
-        conn.row_factory = sqlite3.Row
+        conn = _sqlite_readonly(path)
         try:
             report["userVersion"] = conn.execute("PRAGMA user_version").fetchone()[0]
             report["applicationId"] = conn.execute("PRAGMA application_id").fetchone()[0]
@@ -156,6 +161,109 @@ def sqlite_schema(path: Path) -> dict[str, Any]:
             conn.close()
     except (OSError, sqlite3.Error) as exc:
         report["error"] = type(exc).__name__
+    return report
+
+
+def _integer_digits(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return len(str(abs(int(value))))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _infer_timestamp_unit(max_digits: int | None) -> str | None:
+    if max_digits is None:
+        return None
+    if max_digits <= 10:
+        return "seconds"
+    if max_digits <= 13:
+        return "milliseconds"
+    if max_digits <= 16:
+        return "microseconds"
+    if max_digits <= 19:
+        return "nanoseconds"
+    return "unknown"
+
+
+def _timestamp_magnitude(count: int, minimum: Any, maximum: Any) -> dict[str, Any]:
+    min_digits = _integer_digits(minimum)
+    max_digits = _integer_digits(maximum)
+    return {
+        "count": int(count),
+        "minDigits": min_digits,
+        "maxDigits": max_digits,
+        "inferredUnit": _infer_timestamp_unit(max_digits),
+    }
+
+
+def zcode_task_value_summary(path: Path) -> dict[str, Any]:
+    """Read only aggregate, non-content task metadata from the ZCode task index."""
+    report: dict[str, Any] = {
+        "path": display_path(path),
+        "readOnly": True,
+        "contentFieldsRead": False,
+    }
+    required = {"task_status", "created_at", "updated_at", "archived", "deleted"}
+    try:
+        conn = _sqlite_readonly(path)
+        try:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
+            ).fetchone()
+            if table is None:
+                report["error"] = "UnsupportedTaskSchema"
+                return report
+            columns = {row[1] for row in conn.execute('PRAGMA table_info("tasks")').fetchall()}
+            if not required.issubset(columns):
+                report["error"] = "UnsupportedTaskSchema"
+                return report
+
+            status_rows = conn.execute(
+                """
+                SELECT task_status, COUNT(*) AS count
+                FROM tasks
+                WHERE archived = 0 AND deleted = 0
+                GROUP BY task_status
+                ORDER BY count DESC, task_status
+                """
+            ).fetchall()
+            timestamp_row = conn.execute(
+                """
+                SELECT COUNT(created_at) AS created_count,
+                       MIN(created_at) AS created_min,
+                       MAX(created_at) AS created_max,
+                       COUNT(updated_at) AS updated_count,
+                       MIN(updated_at) AS updated_min,
+                       MAX(updated_at) AS updated_max
+                FROM tasks
+                WHERE archived = 0 AND deleted = 0
+                """
+            ).fetchone()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as exc:
+        report["error"] = type(exc).__name__
+        return report
+
+    report["activeTaskCount"] = sum(int(row["count"]) for row in status_rows)
+    report["statusCounts"] = [
+        {"status": row["task_status"], "count": int(row["count"])}
+        for row in status_rows
+    ]
+    report["timestamps"] = {
+        "createdAt": _timestamp_magnitude(
+            timestamp_row["created_count"],
+            timestamp_row["created_min"],
+            timestamp_row["created_max"],
+        ),
+        "updatedAt": _timestamp_magnitude(
+            timestamp_row["updated_count"],
+            timestamp_row["updated_min"],
+            timestamp_row["updated_max"],
+        ),
+    }
     return report
 
 
@@ -239,11 +347,19 @@ def environment_presence(names: Iterable[str]) -> dict[str, dict[str, bool]]:
     return {name: {"present": bool(os.getenv(name))} for name in names}
 
 
+def _task_index_path(zcode_dbs: list[Path]) -> Path | None:
+    for path in zcode_dbs:
+        if path.name.lower() == "tasks-index.sqlite":
+            return path
+    return None
+
+
 def build_report(
     zcode_extra: Iterable[str] = (),
     commandcode_extra: Iterable[str] = (),
     *,
     commandcode_status: bool = False,
+    zcode_status_summary: bool = False,
 ) -> dict[str, Any]:
     zcode_roots = existing_roots(default_zcode_roots(), zcode_extra)
     command_roots = existing_roots(default_commandcode_roots(), commandcode_extra)
@@ -266,13 +382,21 @@ def build_report(
         if commandcode_status
         else None
     )
+    task_index = _task_index_path(zcode_dbs)
+    task_summary = (
+        zcode_task_value_summary(task_index)
+        if zcode_status_summary and task_index is not None
+        else ({"error": "TaskIndexNotFound"} if zcode_status_summary else None)
+    )
 
     return {
         "reportVersion": REPORT_VERSION,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "privacy": {
             "networkCallsByDiscoveryScript": False,
-            "sqliteRowsRead": False,
+            "commandCodeCliMayUseNetwork": bool(commandcode_status),
+            "sqliteRowsRead": bool(zcode_status_summary),
+            "sqliteContentFieldsRead": False,
             "jsonValuesIncluded": False,
             "environmentValuesIncluded": False,
             "hostnameIncluded": False,
@@ -289,6 +413,7 @@ def build_report(
             "cli": safe_cli_version(("zcode",)),
             "roots": [display_path(path) for path in zcode_roots],
             "databases": [sqlite_schema(path) for path in zcode_dbs],
+            "taskValueSummary": task_summary,
         },
         "commandCode": {
             "cli": command_cli,
@@ -309,6 +434,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Invoke `cmdc status --json` (or equivalent) and record JSON shape only; the CLI may perform its own network checks.",
     )
+    parser.add_argument(
+        "--zcode-status-summary",
+        action="store_true",
+        help="Read aggregate active ZCode task status counts and timestamp magnitude only; no task content/IDs/paths are emitted.",
+    )
     parser.add_argument("--output", default=".local/discovery-report.json", help="Output path (default is gitignored).")
     return parser.parse_args(argv)
 
@@ -319,14 +449,17 @@ def main(argv: list[str] | None = None) -> int:
         args.zcode_root,
         args.commandcode_root,
         commandcode_status=args.commandcode_status,
+        zcode_status_summary=args.zcode_status_summary,
     )
     output = Path(args.output).expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Wrote sanitized discovery report to {output}")
-    print("Review the report before sharing it; no database rows, JSON values, or environment secret values are included.")
+    print("Review the report before sharing it; JSON/environment secret values and ZCode content fields are not included.")
     if args.commandcode_status:
         print("Command Code status was invoked explicitly; its values were reduced to shape/type metadata only.")
+    if args.zcode_status_summary:
+        print("ZCode aggregate status/timestamp metadata was read explicitly; task titles, IDs, content and full paths were not queried.")
     return 0
 
 

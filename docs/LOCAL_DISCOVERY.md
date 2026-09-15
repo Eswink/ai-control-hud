@@ -1,52 +1,69 @@
 # Local source discovery
 
-Issues #1 and #2 require facts from the machine where ZCode and CommandCode are actually installed. `tools.discovery` generates a metadata-only report suitable for manual review before any information is shared.
+Issues #1 and #2 require facts from the machine where ZCode and Command Code are actually installed. `tools.discovery` generates a sanitized report suitable for manual review before any information is shared.
 
-## Safety properties
+## Default safety properties
 
-By default the tool:
+With no opt-in flags the tool:
 
 - performs no network requests;
-- does not query any SQLite table rows;
+- does not query SQLite table rows;
 - opens discovered SQLite databases in read-only mode;
 - records table/view and column schema only;
-- parses selected CommandCode JSON files into key/type/length metadata without recording values;
+- parses selected Command Code JSON files into key/type/length metadata without recording values;
+- reports only whether `COMMAND_CODE_API_KEY` exists, never its value;
 - omits hostname and username;
 - shortens home-directory paths to `~/...` and suppresses arbitrary external parent paths;
 - runs only `--version` for a discovered CLI.
 
-It intentionally does **not** determine task-state mappings or CommandCode usage endpoints yet. Those require a second, explicitly reviewed probe after we know the installed schema/client shape.
-
-## Run
+## Basic run
 
 From the repository root:
 
-```bash
+```cmd
 python -m tools.discovery
 ```
 
 Output defaults to:
 
 ```text
-.local/discovery-report.json
+.local\discovery-report.json
 ```
 
 `.local/` is ignored by Git. Review the JSON manually before sharing it.
 
-If the installation uses a nonstandard location:
+## Explicit evidence probes
 
-```bash
-python -m tools.discovery \
-  --zcode-root /path/to/zcode/state \
-  --commandcode-root /path/to/commandcode/state
+For the current Windows integration work, run both opt-in probes together:
+
+```cmd
+python -m tools.discovery --zcode-status-summary --commandcode-status
 ```
 
-Additional roots are repeatable.
+`--zcode-status-summary` reads only aggregate metadata from the active ZCode `tasks` rows:
+
+- distinct `task_status` values and counts;
+- total active task count;
+- digit magnitude/inferred unit for `created_at` and `updated_at`.
+
+It does **not** query or emit task titles, task IDs, prompts, message data, searchable text, workspace paths, or exact timestamps.
+
+`--commandcode-status` invokes `cmdc status --json` (or another detected supported alias). The Command Code CLI may perform its own network/auth checks. The discovery tool keeps only JSON key/type shape plus exit-code metadata; it does not preserve the command's values or credential material.
+
+The report's `privacy` object records when these opt-in behaviors were used.
+
+## Nonstandard locations
+
+Additional roots are repeatable:
+
+```cmd
+python -m tools.discovery --zcode-root D:\path\to\zcode --commandcode-root D:\path\to\commandcode
+```
 
 ## Tests
 
-The tests intentionally seed fake secret task/auth values and assert those values are absent from generated metadata:
+The tests intentionally seed fake secret task/auth values and assert those values are absent from generated metadata, including the aggregate ZCode probe:
 
-```bash
-python -m pytest -q tools/tests
+```cmd
+python -m pytest -q tools\tests
 ```
