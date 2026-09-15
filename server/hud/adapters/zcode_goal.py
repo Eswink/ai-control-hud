@@ -134,7 +134,7 @@ class ZCodeGoalAdapter:
     ) -> None:
         self.db_path = Path(db_path).expanduser() if db_path is not None else _runtime_db_path()
         self.heartbeat_seconds = heartbeat_seconds or _positive_seconds(
-            "HUD_ZCODE_GOAL_HEARTBEAT_SECONDS", 300, 3600
+            "HUD_ZCODE_GOAL_HEARTBEAT_SECONDS", 120, 3600
         )
         self.recent_terminal_seconds = recent_terminal_seconds or _positive_seconds(
             "HUD_ZCODE_GOAL_RECENT_TERMINAL_SECONDS", 1800, 86400
@@ -253,26 +253,30 @@ class ZCodeGoalAdapter:
         todo_statuses = [_normalize_status(todo["status"]) for todo in todos]
         target_status = _normalize_status(row["status"])
 
-        if "running" in todo_statuses or heartbeat_fresh or target_status == "running":
-            status = "running"
-        elif target_status == "failed":
-            status = "failed"
-        elif "waiting" in todo_statuses or target_status == "waiting":
-            status = "waiting"
-        elif todos and all(status_value == "completed" for status_value in todo_statuses):
-            status = "completed"
-        elif target_status == "completed":
-            status = "completed"
+        # Runtime status is authoritative only while the active-run heartbeat is fresh.
+        # ZCode can leave historical session_target/todo rows marked active/running for
+        # days, so stale flags must never create a live HUD task by themselves.
+        if heartbeat_fresh:
+            if target_status == "failed":
+                status = "failed"
+            elif target_status == "completed" and (
+                not todos or all(value == "completed" for value in todo_statuses)
+            ):
+                status = "completed"
+            elif "waiting" in todo_statuses and "running" not in todo_statuses:
+                status = "waiting"
+            else:
+                status = "running"
         else:
-            status = "unknown"
-
-        recent_terminal = (
-            status in {"failed", "completed"}
-            and updated_at is not None
-            and max(0.0, (now - updated_at).total_seconds()) <= self.recent_terminal_seconds
-        )
-        if status not in {"running", "waiting"} and not heartbeat_fresh and not recent_terminal:
-            return None
+            if target_status not in {"failed", "completed"}:
+                return None
+            status = target_status
+            recent_terminal = (
+                updated_at is not None
+                and max(0.0, (now - updated_at).total_seconds()) <= self.recent_terminal_seconds
+            )
+            if not recent_terminal:
+                return None
 
         activity: str | None = None
         for wanted in ("running", "waiting"):
