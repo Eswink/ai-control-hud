@@ -51,6 +51,45 @@ def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
     }
 
 
+def _timestamp_seconds(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    if numeric > 100_000_000_000_000:
+        return numeric / 1_000_000
+    if numeric > 100_000_000_000:
+        return numeric / 1_000
+    return numeric
+
+
+def _active_goal_session(connection: sqlite3.Connection) -> str | None:
+    target_columns = _columns(connection, "session_target")
+    if not {"session_id", "active_run_last_seen_at"}.issubset(target_columns):
+        return None
+    row = connection.execute(
+        """
+        SELECT session_id, active_run_last_seen_at
+        FROM session_target
+        WHERE active_run_last_seen_at IS NOT NULL
+        ORDER BY active_run_last_seen_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row is None:
+        return None
+    last_seen = _timestamp_seconds(row["active_run_last_seen_at"])
+    if last_seen is None:
+        return None
+    if max(0.0, datetime.now(timezone.utc).timestamp() - last_seen) > 10 * 60:
+        return None
+    return str(row["session_id"])
+
+
 def runtime_db_evidence(path: Path) -> dict:
     result = {
         "path": _display_path(path),
@@ -61,6 +100,7 @@ def runtime_db_evidence(path: Path) -> dict:
         "promptOrMessageContentIncluded": False,
         "localSettings": [],
         "recentModelUsage": [],
+        "activeGoalModelUsage": [],
     }
     if not path.is_file():
         return result
@@ -100,9 +140,8 @@ def runtime_db_evidence(path: Path) -> dict:
                 ]
 
             usage_columns = _columns(connection, "model_usage")
-            if {"provider_id", "model_id", "status", "started_at"}.issubset(
-                usage_columns
-            ):
+            required_usage = {"session_id", "provider_id", "model_id", "status", "started_at"}
+            if required_usage.issubset(usage_columns):
                 usage_rows = connection.execute(
                     """
                     SELECT provider_id, model_id, status,
@@ -123,6 +162,31 @@ def runtime_db_evidence(path: Path) -> dict:
                     }
                     for row in usage_rows
                 ]
+
+                active_session = _active_goal_session(connection)
+                if active_session is not None:
+                    active_rows = connection.execute(
+                        """
+                        SELECT provider_id, model_id, status,
+                               COUNT(*) AS request_count,
+                               MAX(started_at) AS latest_started_at
+                        FROM model_usage
+                        WHERE session_id = ?
+                        GROUP BY provider_id, model_id, status
+                        ORDER BY latest_started_at DESC
+                        LIMIT 20
+                        """,
+                        (active_session,),
+                    ).fetchall()
+                    result["activeGoalModelUsage"] = [
+                        {
+                            "providerId": str(row["provider_id"])[:300],
+                            "modelId": str(row["model_id"])[:300],
+                            "status": str(row["status"])[:80],
+                            "requestCount": int(row["request_count"]),
+                        }
+                        for row in active_rows
+                    ]
         finally:
             connection.close()
     except (OSError, sqlite3.Error) as exc:
