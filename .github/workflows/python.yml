@@ -44,7 +44,12 @@ jobs:
         run: python -m pytest -q
 
       - name: Compile helper scripts
-        run: python -m py_compile scripts/g4_state_db.py
+        run: python -m py_compile scripts/g4_state_db.py scripts/backup_hub_db.py
+
+      - name: Validate Hub deployment assets
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ./scripts/ci-hub-deployment-smoke.sh
 
       - name: Validate PowerShell syntax
         if: runner.os == 'Windows'
