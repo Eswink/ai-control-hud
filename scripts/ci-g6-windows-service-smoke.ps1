@@ -11,7 +11,8 @@ if (-not (Test-Path $agent)) {
 $root = Join-Path $env:RUNNER_TEMP "ai-control-hud-g6-service-smoke"
 $runtimeDb = Join-Path $root "runtime.sqlite"
 $taskIndexDb = Join-Path $root "tasks-index.sqlite"
-$providerConfig = Join-Path $root "provider.json"
+$apiKeyFile = Join-Path $root "commandcode.key"
+$implicitProviderConfig = Join-Path $repoRoot ".local\commandcode-provider.json"
 $machineConfig = Join-Path $root "state\agent.json"
 $port = 18787
 $baseUrl = "http://127.0.0.1:$port"
@@ -33,23 +34,28 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to create synthetic G6 ZCode databases"
 }
 
-$providerJson = @'
+[System.IO.File]::WriteAllText($apiKeyFile, "test-only`n", [System.Text.UTF8Encoding]::new($false))
+
+# Place a valid legacy provider file at the historical implicit location. The
+# service install must ignore it because --provider-config is not supplied.
+New-Item -ItemType Directory -Force (Split-Path -Parent $implicitProviderConfig) | Out-Null
+$implicitProviderJson = @'
 {
   "provider": {
-    "command": {
-      "name": "command",
+    "implicit-canary": {
+      "name": "implicit-canary",
       "kind": "openai",
       "enabled": true,
       "options": {
         "baseURL": "https://api.commandcode.ai/provider/v1",
-        "apiKey": "test-only"
+        "apiKey": "must-not-be-auto-imported"
       },
       "models": {}
     }
   }
 }
 '@
-[System.IO.File]::WriteAllText($providerConfig, $providerJson, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($implicitProviderConfig, $implicitProviderJson, [System.Text.UTF8Encoding]::new($false))
 
 function Wait-AgentState {
     param([int]$TimeoutSeconds = 30)
@@ -91,10 +97,21 @@ function Wait-AgentState {
 
 $installed = $false
 try {
-    Write-Host "[g6-ci] installing Windows service"
+    Write-Host "[g6-ci] importing operator-supplied CommandCode key into DPAPI"
+    & $agent commandcode configure `
+        --config $machineConfig `
+        --api-key-file $apiKeyFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "commandcode configure failed with exit code $LASTEXITCODE"
+    }
+    & $agent commandcode status --config $machineConfig
+    if ($LASTEXITCODE -ne 0) {
+        throw "commandcode status failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host "[g6-ci] installing Windows service without provider import flag"
     & $agent service install `
         --config $machineConfig `
-        --provider-config $providerConfig `
         --runtime-db $runtimeDb `
         --task-index-db $taskIndexDb `
         --listen "127.0.0.1:$port"
@@ -107,6 +124,19 @@ try {
     & $agent doctor --config $machineConfig
     if ($LASTEXITCODE -ne 0) {
         throw "doctor failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host "[g6-ci] deleting operator plaintext key after protected-store validation"
+    Remove-Item -Force $apiKeyFile
+    if (Test-Path $apiKeyFile) {
+        throw "plaintext CommandCode key still exists after deletion"
+    }
+
+    $machineState = Get-Content $machineConfig -Raw | ConvertFrom-Json
+    $protected = Get-Content $machineState.commandCodeSecret -Raw -Encoding Byte
+    $protectedText = [System.Text.Encoding]::UTF8.GetString($protected)
+    if ($protectedText -like "*must-not-be-auto-imported*") {
+        throw "historical implicit provider file was unexpectedly imported"
     }
 
     Write-Host "[g6-ci] starting LocalSystem service"
@@ -153,18 +183,10 @@ try {
         throw "DPAPI SecretStore was unexpectedly removed"
     }
 
-    Write-Host "[g6-ci] deleting plaintext provider import before reinstall"
-    Remove-Item -Force $providerConfig
-    if (Test-Path $providerConfig) {
-        throw "plaintext provider import still exists after deletion"
-    }
-
-    Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore"
-    & $agent service install `
-        --config $machineConfig `
-        --provider-config $providerConfig
+    Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore without provider flag"
+    & $agent service install --config $machineConfig
     if ($LASTEXITCODE -ne 0) {
-        throw "service reinstall without plaintext provider failed with exit code $LASTEXITCODE"
+        throw "service reinstall from protected SecretStore failed with exit code $LASTEXITCODE"
     }
     $installed = $true
 
@@ -188,7 +210,7 @@ try {
         throw "service stop after reinstall failed with exit code $LASTEXITCODE"
     }
 
-    Write-Host "[g6-ci] Windows SCM + DPAPI + reinstall smoke PASSED"
+    Write-Host "[g6-ci] manual CommandCode key + SCM + DPAPI + reinstall smoke PASSED"
 } finally {
     if ($installed) {
         try {
@@ -196,6 +218,9 @@ try {
         } catch {
             Write-Warning "G6 CI cleanup command failed: $($_.Exception.Message)"
         }
+    }
+    if (Test-Path $implicitProviderConfig) {
+        Remove-Item -Force $implicitProviderConfig -ErrorAction SilentlyContinue
     }
     try {
         $leftover = Get-Service -Name "AIControlHUD" -ErrorAction SilentlyContinue
