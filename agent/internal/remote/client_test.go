@@ -61,6 +61,47 @@ func TestClientUploadsStateAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestClientAutoDiscoveryRediscoverAfterAddressFailure(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer secret" {
+			t.Fatalf("unexpected authorization header %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer live.Close()
+
+	config, err := NewConfig("auto", "desktop-main", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	client.discover = func(context.Context) (string, error) {
+		calls++
+		if calls == 1 {
+			return deadURL, nil
+		}
+		return live.URL, nil
+	}
+
+	if err := client.Heartbeat(context.Background(), "test"); err != nil {
+		t.Fatalf("heartbeat after rediscovery: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected two discovery attempts, got %d", calls)
+	}
+	if got := client.ResolvedBaseURL(); got != live.URL {
+		t.Fatalf("unexpected resolved URL %q", got)
+	}
+}
+
 func TestClientRejectsNonSuccessStatusWithoutEchoingResponseBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sensitive server diagnostic", http.StatusUnauthorized)
@@ -102,6 +143,16 @@ func TestFromEnvironmentRequiresTokenWhenURLIsConfigured(t *testing.T) {
 	_, enabled, err := FromEnvironment()
 	if err == nil || enabled {
 		t.Fatalf("expected invalid partial configuration, enabled=%t err=%v", enabled, err)
+	}
+}
+
+func TestNewConfigAcceptsAutoDiscoveryAlias(t *testing.T) {
+	config, err := NewConfig("auto", "desktop-main", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.BaseURL != AutoBaseURL || !config.IsAutoDiscover() {
+		t.Fatalf("auto discovery not normalized: %#v", config)
 	}
 }
 
