@@ -94,3 +94,4 @@ class EventPage(ApiModel):
     schema_version: Literal[1] = 1
     events: list[HubEvent]
     next_after: int = Field(ge=0)
+    latest_seq: int = Field(ge=0)
