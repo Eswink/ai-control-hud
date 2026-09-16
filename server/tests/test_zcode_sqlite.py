@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from server.hud.adapters.base import PublicAdapterError
 from server.hud.adapters.zcode_sqlite import ZCodeSQLiteAdapter
+
+_TEST_NOW = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
 
 
 def _create_task_index(path: Path) -> None:
@@ -49,11 +52,15 @@ def _create_task_index(path: Path) -> None:
         connection.close()
 
 
+def _adapter(db: Path, **kwargs: object) -> ZCodeSQLiteAdapter:
+    return ZCodeSQLiteAdapter(db, now_provider=lambda: _TEST_NOW, **kwargs)
+
+
 def test_collects_visible_tasks_and_maps_conservative_statuses(tmp_path: Path) -> None:
     db = tmp_path / "tasks-index.sqlite"
     _create_task_index(db)
 
-    payload = asyncio.run(ZCodeSQLiteAdapter(db).collect())
+    payload = asyncio.run(_adapter(db).collect())
 
     assert [task.title for task in payload.tasks] == [
         "Running task",
@@ -83,7 +90,7 @@ def test_task_limit_does_not_truncate_summary_counts(tmp_path: Path) -> None:
     db = tmp_path / "tasks-index.sqlite"
     _create_task_index(db)
 
-    payload = asyncio.run(ZCodeSQLiteAdapter(db, task_limit=2).collect())
+    payload = asyncio.run(_adapter(db, task_limit=2).collect())
 
     assert len(payload.tasks) == 2
     assert payload.summary.running == 1
@@ -102,7 +109,7 @@ def test_stale_task_index_rows_are_hidden_from_realtime_hud(tmp_path: Path) -> N
         connection.close()
 
     payload = asyncio.run(
-        ZCodeSQLiteAdapter(db, task_max_age_seconds=3_600).collect()
+        _adapter(db, task_max_age_seconds=3_600).collect()
     )
 
     assert payload.tasks == []
@@ -122,9 +129,20 @@ def test_missing_or_changed_schema_fails_visibly(tmp_path: Path) -> None:
         connection.close()
 
     with pytest.raises(PublicAdapterError, match="Unsupported ZCode task index schema"):
-        asyncio.run(ZCodeSQLiteAdapter(db).collect())
+        asyncio.run(_adapter(db).collect())
 
 
 def test_missing_database_has_safe_public_error(tmp_path: Path) -> None:
     with pytest.raises(PublicAdapterError, match="ZCode task index not found"):
-        asyncio.run(ZCodeSQLiteAdapter(tmp_path / "missing.sqlite").collect())
+        asyncio.run(_adapter(tmp_path / "missing.sqlite").collect())
+
+
+def test_now_provider_must_be_timezone_aware(tmp_path: Path) -> None:
+    db = tmp_path / "tasks-index.sqlite"
+    _create_task_index(db)
+    adapter = ZCodeSQLiteAdapter(
+        db,
+        now_provider=lambda: datetime(2026, 9, 16, 12, 0),
+    )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        asyncio.run(adapter.collect())
