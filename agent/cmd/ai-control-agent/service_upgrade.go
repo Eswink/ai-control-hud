@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/winservice"
 )
@@ -44,6 +47,10 @@ func serviceUpgrade(args []string) error {
 	}
 	target = absolute(target)
 
+	candidateVersion, err := validateUpgradeCandidate(source)
+	if err != nil {
+		return err
+	}
 	staged, err := stageUpgradeExecutable(source, target)
 	if err != nil {
 		return err
@@ -101,9 +108,38 @@ func serviceUpgrade(args []string) error {
 	if wasRunning {
 		state = "running"
 	}
-	fmt.Printf("[service] upgraded=true executable=%s state=%s\n", target, state)
+	fmt.Printf("[service] upgraded=true executable=%s version=%s state=%s\n", target, candidateVersion, state)
 	fmt.Println("[service] machine config, CommandCode SecretStore, Hub SecretStore, firewall rule, and SCM registration were preserved")
 	return nil
+}
+
+func validateUpgradeCandidate(source string) (string, error) {
+	source = absolute(source)
+	if source == "" {
+		return "", errors.New("upgrade source executable is required")
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		return "", fmt.Errorf("inspect upgrade source executable: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("upgrade source executable is not a regular file")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, source, "version").Output()
+	if ctx.Err() != nil {
+		return "", errors.New("upgrade candidate version check timed out")
+	}
+	if err != nil {
+		return "", fmt.Errorf("upgrade candidate failed `version` preflight: %w", err)
+	}
+	candidateVersion := strings.TrimSpace(string(output))
+	if candidateVersion == "" || len(candidateVersion) > 256 || strings.ContainsAny(candidateVersion, "\r\n\x00") {
+		return "", errors.New("upgrade candidate returned an invalid version string")
+	}
+	return candidateVersion, nil
 }
 
 func stageUpgradeExecutable(source, target string) (string, error) {
