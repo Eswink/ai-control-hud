@@ -16,7 +16,7 @@ final class EventPage {
     final long nextAfter;
     final long latestSeq;
 
-    private EventPage(int schemaVersion, List<EventItem> events, long nextAfter, long latestSeq) {
+    EventPage(int schemaVersion, List<EventItem> events, long nextAfter, long latestSeq) {
         this.schemaVersion = schemaVersion;
         this.events = events;
         this.nextAfter = nextAfter;
