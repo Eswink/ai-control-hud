@@ -25,6 +25,8 @@ func TestHubRecordValidate(t *testing.T) {
 		"https://hub.example.test",
 		"http://100.64.0.10:8787",
 		"http://127.0.0.1:8787",
+		HubAutoBaseURL,
+		"auto",
 	} {
 		record := HubRecord{AgentID: "desktop-main", BaseURL: baseURL, Token: "secret"}
 		if err := record.Validate(); err != nil {
