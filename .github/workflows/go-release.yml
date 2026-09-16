@@ -18,10 +18,13 @@ on:
       - 'scripts/hub_bundle.py'
       - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
+      - 'scripts/go_release_manifest.py'
       - 'scripts/ai-control-hub-systemd.sh'
       - 'scripts/ai-control-hub-lan-doctor.sh'
       - 'docs/HUB_DEPLOYMENT.md'
       - 'docs/HUB_LAN_DOCTOR.md'
+      - 'docs/GO_RELEASE.md'
+      - 'docs/GO_RELEASE_MANIFEST.md'
       - '.github/workflows/go-release.yml'
 
 concurrency:
@@ -229,6 +232,9 @@ jobs:
     needs: [build, hub]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Resolve version
         shell: bash
         env:
@@ -250,7 +256,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Verify target checksums and build unified manifest
+      - name: Verify target checksums and build unified manifests
         shell: bash
         run: |
           set -euo pipefail
@@ -263,7 +269,20 @@ jobs:
             | xargs -0 sha256sum > SHA256SUMS
           grep -Fq "ai-control-agent_${VERSION}_windows-amd64.zip" SHA256SUMS
           grep -Fq "ai-control-hub_${VERSION}_linux-amd64.zip" SHA256SUMS
-          cat SHA256SUMS
+          cd ..
+          python3 scripts/go_release_manifest.py build \
+            --version "$VERSION" \
+            --commit "$GITHUB_SHA" \
+            --output dist/RELEASE_MANIFEST.json \
+            --artifact "ai-control-agent:windows-amd64:dist/ai-control-agent_${VERSION}_windows-amd64.zip" \
+            --artifact "ai-control-agent:linux-amd64:dist/ai-control-agent_${VERSION}_linux-amd64.tar.gz" \
+            --artifact "ai-control-agent:darwin-amd64:dist/ai-control-agent_${VERSION}_darwin-amd64.tar.gz" \
+            --artifact "ai-control-agent:darwin-arm64:dist/ai-control-agent_${VERSION}_darwin-arm64.tar.gz" \
+            --artifact "ai-control-hub:linux-amd64:dist/ai-control-hub_${VERSION}_linux-amd64.zip"
+          python3 scripts/go_release_manifest.py verify \
+            --manifest dist/RELEASE_MANIFEST.json \
+            --directory dist
+          cat dist/RELEASE_MANIFEST.json
 
       - name: Upload combined Go release artifact
         uses: actions/upload-artifact@v7
@@ -302,13 +321,14 @@ jobs:
           name: ai-control-hud-go-release-${{ env.VERSION }}
           path: dist
 
-      - name: Attest Go release archives and manifest
+      - name: Attest Go release archives and manifests
         uses: actions/attest@v4.2.2
         with:
           subject-path: |
             dist/*.zip
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/RELEASE_MANIFEST.json
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
