@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_listen() {
-  local value="$1"
+  local value="${1:-$LISTEN}"
   if [[ ! "$value" =~ ^[A-Za-z0-9._-]+:([0-9]+)$ ]]; then
     echo "--listen must use HOST:PORT with an IPv4 address or hostname" >&2
     exit 2
@@ -77,7 +77,7 @@ listen_port() {
 }
 
 render_unit() {
-  validate_listen
+  validate_listen "$LISTEN"
   local host port
   host="$(listen_host)"
   port="$(listen_port)"
@@ -129,7 +129,7 @@ case "$ACTION" in
     ;;
   install)
     require_systemd
-    validate_listen
+    validate_listen "$LISTEN"
     [[ -n "$SOURCE" ]] || { echo "--source is required" >&2; exit 2; }
     [[ -n "$TOKEN_FILE" && -f "$TOKEN_FILE" ]] || { echo "--token-file must point to a readable token file" >&2; exit 2; }
     [[ "$AGENT_ID" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || { echo "--agent-id contains unsupported characters" >&2; exit 2; }
