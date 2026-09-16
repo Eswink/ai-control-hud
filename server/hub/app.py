@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from fastapi import FastAPI, Header, HTTPException, status
+from fastapi import FastAPI, Header, HTTPException, Query, status
 
 from server.hud.models import (
     CommandCodeState,
@@ -19,7 +19,14 @@ from server.hud.models import (
 )
 
 from .config import HubConfig
-from .models import AgentHeartbeat, AgentReceipt, AgentStateEnvelope
+from .models import (
+    AgentEventBatch,
+    AgentHeartbeat,
+    AgentReceipt,
+    AgentStateEnvelope,
+    EventPage,
+    EventReceipt,
+)
 from .store import HubStore
 
 HUB_VERSION = "0.2.0-hub-dev"
@@ -97,6 +104,30 @@ def create_hub_app(
         )
         return AgentReceipt(agent_id=heartbeat.agent_id, received_at=received_at)
 
+    @app.post(
+        "/api/v1/agent/events",
+        response_model=EventReceipt,
+        response_model_by_alias=True,
+    )
+    async def ingest_events(
+        batch: AgentEventBatch,
+        authorization: str | None = Header(default=None),
+    ) -> EventReceipt:
+        require_agent_token(authorization)
+        received_at = _utc(now())
+        accepted, duplicates = hub_store.record_events(
+            batch.agent_id,
+            batch.sent_at,
+            batch.events,
+            received_at,
+        )
+        return EventReceipt(
+            agent_id=batch.agent_id,
+            received_at=received_at,
+            accepted=accepted,
+            duplicates=duplicates,
+        )
+
     @app.get("/api/v1/state", response_model=HudState, response_model_by_alias=True)
     async def get_state() -> HudState:
         loaded = hub_store.load_state(config.primary_agent_id)
@@ -143,6 +174,19 @@ def create_hub_app(
                 command_code=projected.command_code.health.status,
             ),
         )
+
+    @app.get(
+        "/api/v1/events",
+        response_model=EventPage,
+        response_model_by_alias=True,
+    )
+    async def get_events(
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=100),
+    ) -> EventPage:
+        events = hub_store.list_events(config.primary_agent_id, after, limit)
+        next_after = events[-1].seq if events else after
+        return EventPage(events=events, next_after=next_after)
 
     return app
 
