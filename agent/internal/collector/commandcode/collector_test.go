@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testSecret = "cc-test-secret-do-not-log"
@@ -96,6 +97,13 @@ func TestCollectsCreditsWindowsAndPlan(t *testing.T) {
 	}
 	if usage.Windows[0].ResetAt == nil || usage.Windows[1].ResetAt == nil {
 		t.Fatal("reset timestamps missing")
+	}
+	wantFiveHourReset := time.UnixMilli(1789490000000).UTC()
+	if !usage.Windows[0].ResetAt.Equal(wantFiveHourReset) {
+		t.Fatalf("5h reset = %s, want %s", usage.Windows[0].ResetAt.Format(time.RFC3339Nano), wantFiveHourReset.Format(time.RFC3339Nano))
+	}
+	if usage.Windows[0].ResetAt.Nanosecond()%int(time.Millisecond) != 0 {
+		t.Fatalf("5h reset lost millisecond precision: %s", usage.Windows[0].ResetAt.Format(time.RFC3339Nano))
 	}
 	if len(authorizationHeaders) != 2 {
 		t.Fatalf("requests = %d", len(authorizationHeaders))
