@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ci-repository-safety.py"
 
@@ -74,9 +76,13 @@ def test_environment_and_dpapi_artifacts_are_rejected(tmp_path: Path) -> None:
     assert "tracked private artifact" in result.stderr
 
 
-def test_private_key_material_is_rejected_even_in_text_file(tmp_path: Path) -> None:
-    begin = "-----BEGIN " + "PRIVATE" + " KEY-----"
-    end = "-----END " + "PRIVATE" + " KEY-----"
+@pytest.mark.parametrize("kind", ["", "RSA"])
+def test_private_key_material_is_rejected_even_in_text_file(tmp_path: Path, kind: str) -> None:
+    prefix = "-----BEGIN "
+    middle = (kind + " ") if kind else ""
+    suffix = "PRIVATE" + " KEY-----"
+    begin = prefix + middle + suffix
+    end = "-----END " + middle + suffix
     repo = init_repo(
         tmp_path,
         {
