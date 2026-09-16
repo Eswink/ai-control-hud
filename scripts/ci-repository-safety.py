@@ -40,9 +40,9 @@ BANNED_SEGMENTS = {".local"}
 
 def private_key_markers() -> tuple[bytes, ...]:
     prefix = "-----BEGIN "
-    suffix = " PRIVATE KEY-----"
+    suffix = "PRIVATE KEY-----"
     return tuple(
-        (prefix + kind + suffix).encode("ascii")
+        (prefix + ((kind + " ") if kind else "") + suffix).encode("ascii")
         for kind in ("", "RSA", "EC", "OPENSSH")
     )
 
