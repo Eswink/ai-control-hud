@@ -34,37 +34,72 @@ installed=false state=not-installed
 
 this is a first-install path. Do not call `service restart` yet.
 
-## 3. First service installation
+## 3. Import the operator-supplied CommandCode key
 
-The installer auto-resolves the interactive user's standard ZCode databases and persists their absolute paths for LocalSystem. On first install it also needs a CommandCode provider credential.
+CommandCode API keys are **operator-supplied only**. The project does not discover, scrape, recover, or auto-retrieve a real CommandCode key from ZCode, accounts, files, applications, or external services.
 
-CommandCode API keys are **operator-supplied only**. The project must not try to discover, scrape, recover, or auto-retrieve a real CommandCode key from accounts, files, applications, or external services. If the old provider-import file was deleted, create a new local import file yourself using a key you enter/provide directly.
+The preferred first-install path is a one-line temporary file created by the operator. For example, create `C:\Temp\commandcode.key` yourself and place only the API key in that file. Do not paste the key into chat, GitHub, screenshots, or a command-line argument.
 
-If a valid Windows DPAPI CommandCode SecretStore already exists, it is reused. Otherwise provide the operator-created gitignored provider import file explicitly:
+Import it directly into the platform SecretStore:
+
+```powershell
+.\ai-control-agent.exe commandcode configure `
+  --api-key-file C:\Temp\commandcode.key
+
+.\ai-control-agent.exe commandcode status
+```
+
+Expected status is similar to:
+
+```text
+configured=true provider=command-code host=api.commandcode.ai secret=C:\ProgramData\AIControlHUD\commandcode.dpapi
+```
+
+The command fixes the provider metadata to the verified official Command Code endpoint and stores the key in the platform SecretStore. On Windows that store is machine-scope DPAPI protected. The key value is never printed.
+
+The older explicit provider-JSON import remains available for compatibility:
 
 ```powershell
 .\ai-control-agent.exe service install `
-  --provider-config "C:\path\to\ai-control-hud\.local\commandcode-provider.json"
+  --provider-config "C:\path\to\commandcode-provider.json"
 ```
 
-Do not paste the provider JSON or its API key into test reports, chat, screenshots, or GitHub.
+but it is no longer the recommended way to enter a new key.
+
+## 4. Install the Windows service
+
+The installer auto-resolves the interactive user's standard ZCode databases and persists their absolute paths for LocalSystem. Once `commandcode status` is configured, a normal first install can reuse that SecretStore directly:
+
+```powershell
+.\ai-control-agent.exe service install
+```
 
 If ZCode is not in the standard user-profile location, supply absolute paths:
 
 ```powershell
 .\ai-control-agent.exe service install `
-  --provider-config "C:\path\to\ai-control-hud\.local\commandcode-provider.json" `
   --runtime-db "$env:USERPROFILE\.zcode\cli\db\db.sqlite" `
   --task-index-db "$env:USERPROFILE\.zcode\v2\tasks-index.sqlite"
 ```
 
-A successful install reports the installed executable, machine config, resolved ZCode paths, and whether the DPAPI CommandCode SecretStore was imported or reused. It must not print the API key.
+A successful install reports the installed executable, machine config, resolved ZCode paths, and that the existing protected SecretStore was reused. It must not print the API key.
 
-## 4. Validate configuration, then start
+## 5. Validate configuration, then remove the plaintext key file
 
 ```powershell
 .\ai-control-agent.exe doctor
 .\ai-control-agent.exe doctor --live
+```
+
+Only after those checks succeed, delete the temporary plaintext key file:
+
+```powershell
+Remove-Item C:\Temp\commandcode.key
+```
+
+Then start the service:
+
+```powershell
 .\ai-control-agent.exe service start
 .\ai-control-agent.exe service status
 ```
@@ -84,10 +119,30 @@ Then verify on the Hub:
 curl -fsS http://127.0.0.1:8787/api/v1/state
 ```
 
-Before the first Windows upload the Hub intentionally returns HTTP 503 for `/api/v1/state`; after the Agent uploads its first snapshot this endpoint should return schema-v1 state.
+Before the first Windows upload the Hub intentionally returns HTTP 503 for `/api/v1/state`; after the Agent uploads its first snapshot this endpoint returns schema-v1 state.
 
-## 5. Android interpretation
+## 6. Android interpretation
 
-If Android has discovered the Hub but the Hub still has no primary-agent snapshot, the current client may render the dashboard as offline because `/api/v1/state` returns HTTP 503. Interpret this as "Hub reachable, waiting for first Agent snapshot" when Hub `/api/v1/health` is 200 and Windows service is not yet uploading.
+When the Hub is reachable but has not yet received the first primary-Agent snapshot, current Android builds display:
 
-A follow-up Android UX iteration tracks making that distinction explicit in the UI instead of collapsing both cases into `offline`.
+```text
+WAITING FOR AGENT
+```
+
+This is distinct from transport `OFFLINE`. Once the Windows Agent uploads its first snapshot, Android returns to `LIVE` or `DEGRADED` according to source health.
+
+## 7. Credential lifecycle
+
+Inspect the protected credential without revealing the key:
+
+```powershell
+.\ai-control-agent.exe commandcode status
+```
+
+To intentionally remove it:
+
+```powershell
+.\ai-control-agent.exe commandcode remove
+```
+
+Removing the SecretStore makes configured service collection fail until a new operator-supplied key is imported. The command never tries to recover the old key from another source.
