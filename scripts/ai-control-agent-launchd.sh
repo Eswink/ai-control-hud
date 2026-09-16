@@ -42,6 +42,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$CONFIG_PATH" in
+  /*) ;;
+  *) CONFIG_PATH="$PWD/$CONFIG_PATH" ;;
+esac
+
 require_launchd() {
   [[ "$(uname -s)" == "Darwin" ]] || { echo "launchd adapter requires macOS" >&2; exit 1; }
   command -v launchctl >/dev/null 2>&1 || { echo "launchctl is unavailable" >&2; exit 1; }
