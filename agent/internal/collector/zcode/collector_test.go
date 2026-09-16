@@ -220,7 +220,7 @@ func TestRecentTerminalGoalIsVisibleButOldTerminalFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE session_target SET status='failed', time_updated=?, active_run_last_seen_at=?`, now.Add(-30*time.Second).UnixMilli(), now.Add(-3*time.Hour).UnixMilli()); err != nil {
+	if _, err := db.Exec(`UPDATE session_target SET status='failed', time_updated=?, active_run_last_seen_at=NULL`, now.Add(-30*time.Second).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE todo SET status='completed'`); err != nil {
