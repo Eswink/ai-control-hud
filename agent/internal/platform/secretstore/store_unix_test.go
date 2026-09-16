@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const testRecordJSON = `{"providerId":"command","baseUrl":"https://api.commandcode.ai/provider/v1","apiKey":"test-value"}`
+
 func TestUnixSecretStoreRoundTripAndPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "commandcode.json")
 	want := Record{ProviderID: "command", BaseURL: "https://api.commandcode.ai/provider/v1", APIKey: "test-value"}
@@ -37,12 +39,30 @@ func TestUnixSecretStoreRoundTripAndPermissions(t *testing.T) {
 	}
 }
 
-func TestUnixSecretStoreRejectsBroadPermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "commandcode.json")
-	if err := os.WriteFile(path, []byte(`{"providerId":"command","baseUrl":"https://api.commandcode.ai/provider/v1","apiKey":"test-value"}`), 0o644); err != nil {
+func TestUnixSecretStoreRejectsBroadFilePermissions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "commandcode.json")
+	if err := os.WriteFile(path, []byte(testRecordJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Read(path); err == nil {
-		t.Fatal("expected broad permission rejection")
+		t.Fatal("expected broad file permission rejection")
+	}
+}
+
+func TestUnixSecretStoreRejectsBroadDirectoryPermissions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "commandcode.json")
+	if err := os.WriteFile(path, []byte(testRecordJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err == nil {
+		t.Fatal("expected broad directory permission rejection")
 	}
 }
