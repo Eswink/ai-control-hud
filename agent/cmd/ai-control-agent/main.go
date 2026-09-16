@@ -125,8 +125,10 @@ func serve(
 		IdleTimeout:       60 * time.Second,
 	}
 
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if collectorLoop != nil {
-		collectorLoop.Start(ctx)
+		collectorLoop.Start(runCtx)
 	}
 
 	errCh := make(chan error, 1)
@@ -144,8 +146,9 @@ func serve(
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown HTTP server: %w", err)
 		}
@@ -158,6 +161,7 @@ func serve(
 		}
 		return nil
 	case err := <-errCh:
+		cancel()
 		if collectorLoop != nil {
 			collectorLoop.Wait()
 		}
