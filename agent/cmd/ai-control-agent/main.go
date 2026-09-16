@@ -40,6 +40,8 @@ func run(args []string) error {
 			return runConfigure(args[1:])
 		case "config":
 			return runConfigCommand(args[1:])
+		case "commandcode":
+			return runCommandCodeCommand(args[1:])
 		case "hub":
 			return runHubCommand(args[1:])
 		case "service":
@@ -216,11 +218,4 @@ func enabledLabel(enabled bool) string {
 		return "enabled"
 	}
 	return "disabled"
-}
-
-func envOr(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }
