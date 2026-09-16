@@ -141,6 +141,14 @@ func serve(
 	if collectorLoop != nil {
 		collectorLoop.Start(runCtx)
 	}
+	remoteLoop, err := startRemoteUploader(runCtx, snapshotStore)
+	if err != nil {
+		cancel()
+		if collectorLoop != nil {
+			collectorLoop.Wait()
+		}
+		return fmt.Errorf("configure remote hub: %w", err)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -166,6 +174,9 @@ func serve(
 		if collectorLoop != nil {
 			collectorLoop.Wait()
 		}
+		if remoteLoop != nil {
+			remoteLoop.Wait()
+		}
 		err := <-errCh
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
@@ -175,6 +186,9 @@ func serve(
 		cancel()
 		if collectorLoop != nil {
 			collectorLoop.Wait()
+		}
+		if remoteLoop != nil {
+			remoteLoop.Wait()
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
