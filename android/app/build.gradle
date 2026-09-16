@@ -47,6 +47,12 @@ android {
         versionName appVersionName
     }
 
+    sourceSets {
+        test {
+            resources.srcDir file('../../server/tests/fixtures')
+        }
+    }
+
     if (releaseSigningConfigured) {
         signingConfigs {
             release {
