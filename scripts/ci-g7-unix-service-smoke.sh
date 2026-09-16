@@ -124,10 +124,9 @@ installed=0
 [[ -f "$secret_path" ]] || { echo "SecretStore disappeared" >&2; exit 1; }
 
 rm -f "$PROVIDER_CONFIG"
-echo "[g7-ci] reinstall without plaintext provider or listen override"
+echo "[g7-ci] reinstall from preserved SecretStore without provider flag"
 HOME="$SMOKE_HOME" bash "$ADAPTER" install \
   --agent "$AGENT" \
-  --provider-config "$PROVIDER_CONFIG" \
   --config "$CONFIG_PATH"
 installed=1
 sudo "$AGENT" doctor --config "$CONFIG_PATH"
