@@ -13,8 +13,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const protectedFileSDDL = "D:P(A;;FA;;;SY)(A;;FA;;;BA)"
-
 func Supported() bool { return true }
 
 func Write(path string, record Record) error {
@@ -123,7 +121,12 @@ func copyAndFreeBlob(blob *windows.DataBlob) []byte {
 }
 
 func protectACL(path string) error {
-	descriptor, err := windows.SecurityDescriptorFromString(protectedFileSDDL)
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil || user == nil || user.User.Sid == nil {
+		return errors.New("resolve installer SID failed")
+	}
+	sddl := fmt.Sprintf("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;%s)", user.User.Sid.String())
+	descriptor, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
 		return errors.New("build secret store ACL failed")
 	}
