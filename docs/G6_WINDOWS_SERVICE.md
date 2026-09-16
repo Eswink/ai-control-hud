@@ -1,0 +1,128 @@
+# G6 Windows Service + SecretStore
+
+G6 turns the foreground Go backend into a Windows-resident service without changing schema-v1 or the Android server URL.
+
+## Machine layout
+
+The service deliberately separates executable, non-secret configuration, and credentials:
+
+```text
+%ProgramFiles%\AI Control HUD\ai-control-agent.exe
+%ProgramData%\AIControlHUD\agent.json
+%ProgramData%\AIControlHUD\commandcode.dpapi
+```
+
+- The installed executable lives under `Program Files` so a LocalSystem service is not launched from a user-writable project directory.
+- `agent.json` contains only the listen address and absolute ZCode database paths.
+- `commandcode.dpapi` contains the CommandCode provider record encrypted with Windows DPAPI using machine scope.
+- The protected secret file has a non-inheriting ACL for `SYSTEM`, `Administrators`, and the user who performed installation. Other local users are not granted access.
+
+No API key is placed in the Windows service command line, environment, Android configuration, machine config, or logs.
+
+## Why absolute ZCode paths are persisted
+
+A Windows service normally runs as LocalSystem. `os.UserHomeDir()` in that process does not refer to the interactive developer profile, so resolving `~/.zcode/...` at service startup would select the wrong profile.
+
+`service install` therefore resolves the current interactive user's ZCode runtime and task-index paths once and persists their absolute paths in machine config. The service opens those SQLite files read-only using the same collectors already validated in G4/G5.
+
+## Commands
+
+Run installation from an elevated PowerShell using the freshly validated G6 executable:
+
+```powershell
+.\ai-control-agent.exe service install `
+  --provider-config D:\github_programs\ai-control-hud\.local\commandcode-provider.json
+```
+
+Optional explicit ZCode paths are available if auto-discovery is not desired:
+
+```powershell
+.\ai-control-agent.exe service install `
+  --provider-config D:\github_programs\ai-control-hud\.local\commandcode-provider.json `
+  --runtime-db C:\Users\you\.zcode\cli\db\db.sqlite `
+  --task-index-db C:\Users\you\.zcode\v2\tasks-index.sqlite
+```
+
+The install operation:
+
+1. verifies that at least one ZCode database is readable;
+2. reads the existing gitignored provider mirror once;
+3. validates that it is the official CommandCode provider and has a key;
+4. writes the provider record to DPAPI SecretStore;
+5. writes machine config without credentials;
+6. copies the current executable into `Program Files`;
+7. registers `AIControlHUD` as an automatic Windows service.
+
+The plaintext import file is **not** deleted automatically. Keep it until the final target-machine service validation is complete. After the service survives restart/boot validation and `doctor --live` succeeds, it can be removed manually.
+
+Lifecycle commands:
+
+```powershell
+.\ai-control-agent.exe service status
+.\ai-control-agent.exe service start
+.\ai-control-agent.exe service stop
+.\ai-control-agent.exe service restart
+.\ai-control-agent.exe service remove
+```
+
+`service remove` keeps machine config, protected secret, and installed executable so reinstall is reversible. To remove those files as well:
+
+```powershell
+.\ai-control-agent.exe service remove --purge
+```
+
+## Doctor
+
+Local checks:
+
+```powershell
+.\ai-control-agent.exe doctor
+```
+
+The command verifies machine config, configured ZCode paths, DPAPI decryption, official provider identity, and reports service state. It prints no API key or Authorization header.
+
+A bounded live CommandCode request can be added explicitly:
+
+```powershell
+.\ai-control-agent.exe doctor --live
+```
+
+Only the normalized plan label is printed from the live billing result.
+
+## Foreground troubleshooting
+
+The machine configuration can be run outside SCM while debugging:
+
+```powershell
+.\ai-control-agent.exe run --config "$env:ProgramData\AIControlHUD\agent.json"
+```
+
+Stop the Windows service first because only one process may own TCP 8787.
+
+The legacy G5 foreground launcher remains a separate rollback path until service validation is complete.
+
+## Service runtime
+
+SCM starts the installed executable as:
+
+```text
+ai-control-agent.exe service run --config <machine-config>
+```
+
+The platform service adapter converts SCM stop/shutdown requests into context cancellation. The existing HTTP server and collector runtime then perform the same bounded graceful shutdown used in foreground mode.
+
+Windows-specific imports are isolated under `agent/internal/platform/*`. Domain, store, API, collectors, and runtime remain platform-neutral.
+
+## Final target-machine gate
+
+Code/CI completion does not close G6. The final gate is intentionally performed last on the target Windows machine:
+
+1. install the G6 artifact from elevated PowerShell;
+2. run `doctor --live`;
+3. stop the current foreground Go process;
+4. start the service and verify local `/api/v1/state` is LIVE;
+5. verify the existing Android HUD reconnects unchanged;
+6. restart the service and verify Android reconnects;
+7. reboot Windows and verify the service starts automatically without an interactive shell;
+8. only then remove the old plaintext `.local/commandcode-provider.json` if desired;
+9. verify `service remove`, reinstall, and start are reversible.
