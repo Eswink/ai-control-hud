@@ -1,8 +1,8 @@
 package dev.eswink.aicontrolhud;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertEquals;
 
 import org.junit.Test;
 
@@ -46,20 +46,19 @@ public final class NotificationPolicyTest {
 
     @Test
     public void oldOfflineEventsAreConsumedSilently() {
-        assertFalse(NotificationPolicy.shouldSpeak(
-                event("task.completed", NOW - NotificationPolicy.MAX_SPEECH_AGE_MS - 1L),
-                true,
-                false,
-                12 * 60,
-                NOW
-        ));
-        assertTrue(NotificationPolicy.shouldSpeak(
-                event("task.completed", NOW - NotificationPolicy.MAX_SPEECH_AGE_MS),
-                true,
-                false,
-                12 * 60,
-                NOW
-        ));
+        EventPage.EventItem old = event(
+                "task.completed",
+                NOW - NotificationPolicy.MAX_SPEECH_AGE_MS - 1L
+        );
+        assertFalse(NotificationPolicy.shouldSpeak(old, true, false, 12 * 60, NOW));
+        assertTrue(NotificationPolicy.isTooOld(old, NOW));
+
+        EventPage.EventItem boundary = event(
+                "task.completed",
+                NOW - NotificationPolicy.MAX_SPEECH_AGE_MS
+        );
+        assertTrue(NotificationPolicy.shouldSpeak(boundary, true, false, 12 * 60, NOW));
+        assertFalse(NotificationPolicy.isTooOld(boundary, NOW));
     }
 
     @Test
@@ -93,6 +92,18 @@ public final class NotificationPolicyTest {
         assertEquals("Task Compile backend failed.", NotificationPolicy.speechText(failed, Locale.US));
         assertEquals("任务「Compile backend」已完成。", NotificationPolicy.speechText(completed, Locale.SIMPLIFIED_CHINESE));
         assertEquals("任务「Compile backend」执行失败。", NotificationPolicy.speechText(failed, Locale.SIMPLIFIED_CHINESE));
+    }
+
+    @Test
+    public void offlineSummaryUsesDeviceLanguage() {
+        assertEquals(
+                "Older task updates were received while the HUD was offline.",
+                NotificationPolicy.offlineSummaryText(Locale.US)
+        );
+        assertEquals(
+                "离线期间有较早的任务状态更新，已同步到控制面板。",
+                NotificationPolicy.offlineSummaryText(Locale.SIMPLIFIED_CHINESE)
+        );
     }
 
     private static EventPage.EventItem event(String type, long occurredAtMillis) {
