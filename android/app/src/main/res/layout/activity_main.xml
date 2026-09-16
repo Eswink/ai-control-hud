@@ -33,7 +33,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:hint="192.168.1.50:8787"
+            android:hint="auto.lan or 192.168.101.103:8787"
             android:inputType="textUri"
             android:singleLine="true"
             android:textColor="#F1F3F4"
@@ -93,7 +93,7 @@
                     android:textStyle="bold" />
             </LinearLayout>
 
-            <TextView
+            <dev.eswink.aicontrolhud.ServerAddressView
                 android:id="@+id/serverLabel"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
