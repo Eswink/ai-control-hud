@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/fileacl"
+	"github.com/Eswink/ai-control-hud/agent/internal/platform/sourceaccess"
 )
 
 const schemaVersion = 1
@@ -90,6 +91,11 @@ func Load(path string) (Config, error) {
 func Save(path string, config Config) error {
 	if err := config.Validate(); err != nil {
 		return err
+	}
+	if sourceaccess.Supported() {
+		if err := sourceaccess.EnsureServiceReadable(config.ZCodeRuntimeDB, config.ZCodeTaskIndexDB); err != nil {
+			return fmt.Errorf("prepare ZCode service access: %w", err)
+		}
 	}
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
