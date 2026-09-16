@@ -40,7 +40,10 @@ func run(args []string) error {
 			return runConfigure(args[1:])
 		case "config":
 			return runConfigCommand(args[1:])
+		case "hub":
+			return runHubCommand(args[1:])
 		case "service":
+			rememberMachineConfigArgument(args[1:])
 			return runServiceCommand(args[1:])
 		case "doctor":
 			return runDoctor(args[1:])
@@ -66,7 +69,9 @@ func runForeground(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *config != "" {
-		return runConfigured(ctx, absolute(*config))
+		resolvedConfig := absolute(*config)
+		_ = os.Setenv("AI_CONTROL_MACHINE_CONFIG", resolvedConfig)
+		return runConfigured(ctx, resolvedConfig)
 	}
 
 	started := time.Now().UTC()
@@ -194,6 +199,15 @@ func serve(
 			return err
 		}
 		return nil
+	}
+}
+
+func rememberMachineConfigArgument(args []string) {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--config" {
+			_ = os.Setenv("AI_CONTROL_MACHINE_CONFIG", absolute(args[i+1]))
+			return
+		}
 	}
 }
 
