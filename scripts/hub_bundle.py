@@ -18,10 +18,12 @@ VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$")
 INCLUDE_FILES = (
     "docs/HUB_DEPLOYMENT.md",
     "docs/HUB_LAN_DOCTOR.md",
+    "docs/HUB_UPGRADE.md",
     "docs/H3_FIELD_VALIDATION.md",
     "docs/H3_WINDOWS_FIRST_INSTALL.md",
     "scripts/ai-control-hub-systemd.sh",
     "scripts/ai-control-hub-lan-doctor.sh",
+    "scripts/ai-control-hub-upgrade.sh",
 )
 
 
