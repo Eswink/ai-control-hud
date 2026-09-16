@@ -74,16 +74,23 @@ func serviceUpgrade(args []string) error {
 	stagedConsumed = true
 
 	if wasRunning {
-		if err := winservice.Start(windowsServiceName); err != nil {
+		if startErr := winservice.Start(windowsServiceName); startErr != nil {
+			stopErr := winservice.Stop(windowsServiceName)
 			rollbackErr := rollbackUpgradeExecutable(target, backup)
 			restartErr := winservice.Start(windowsServiceName)
 			if rollbackErr != nil {
-				return fmt.Errorf("new service failed to start: %w; binary rollback failed: %v; old service restart: %v", err, rollbackErr, restartErr)
+				return fmt.Errorf(
+					"new service failed to start: %w; stop-before-rollback: %v; binary rollback failed: %v; old service restart: %v",
+					startErr, stopErr, rollbackErr, restartErr,
+				)
 			}
 			if restartErr != nil {
-				return fmt.Errorf("new service failed to start: %w; old binary restored but old service restart failed: %v", err, restartErr)
+				return fmt.Errorf(
+					"new service failed to start: %w; stop-before-rollback: %v; old binary restored but old service restart failed: %v",
+					startErr, stopErr, restartErr,
+				)
 			}
-			return fmt.Errorf("new service failed to start and was rolled back successfully: %w", err)
+			return fmt.Errorf("new service failed to start and was rolled back successfully: %w", startErr)
 		}
 	}
 
