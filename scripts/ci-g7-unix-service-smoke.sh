@@ -122,16 +122,26 @@ installed=0
 [[ -f "$secret_path" ]] || { echo "SecretStore disappeared" >&2; exit 1; }
 
 rm -f "$PROVIDER_CONFIG"
-echo "[g7-ci] reinstall without plaintext provider"
+echo "[g7-ci] reinstall without plaintext provider or listen override"
 bash "$ADAPTER" install \
   --agent "$AGENT" \
   --provider-config "$PROVIDER_CONFIG" \
-  --listen "127.0.0.1:$PORT" \
   --config "$CONFIG_PATH"
 installed=1
 sudo "$AGENT" doctor --config "$CONFIG_PATH"
+preserved_listen="$(sudo python3 - "$CONFIG_PATH" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["listen"])
+PY
+)"
+[[ "$preserved_listen" == "127.0.0.1:$PORT" ]] || {
+  echo "listen setting changed during reinstall: $preserved_listen" >&2
+  exit 1
+}
 bash "$ADAPTER" start >/dev/null
 wait_state
 bash "$ADAPTER" stop
 
-echo "[g7-ci] $(uname -s) service + SecretStore smoke PASSED"
+echo "[g7-ci] $(uname -s) service + SecretStore + reinstall smoke PASSED"
