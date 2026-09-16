@@ -277,5 +277,7 @@ func upsertAgent(ctx context.Context, exec sqlExecutor, agentID string, sentAt, 
 }
 
 func formatTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	// Match Python datetime.isoformat() for UTC database columns so an existing
+	// Python Hub can still read a database after a Go-Hub cutover/rollback.
+	return value.UTC().Format("2006-01-02T15:04:05.999999999+00:00")
 }
