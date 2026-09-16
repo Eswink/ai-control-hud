@@ -1,46 +1,88 @@
-# Central Hub Deployment Runbook
+# Central Hub Deployment Runbook — Go Runtime
 
-Status: deployment guide for Central Hub V2 (H3/H6/H7)
+Status: deployment guide for Central Hub V2 on CentOS/RHEL-family hosts.
 
-This guide deploys the AI Control Hub to a 24/7 CentOS/RHEL-family host, keeps ZCode/CommandCode collection on the Windows development machine, and points the Android HUD at the Hub over a trusted private network.
+The production Hub runtime is a standalone Go binary named `ai-control-hub`. The CentOS host does **not** need Python, pip, virtualenv, or a Go compiler. CI produces a statically linked Linux/amd64 binary and packages it with the systemd installer and field-validation docs.
 
-For the current dormitory LAN, **automatic LAN discovery is the preferred mode**. The currently observed server address is `192.168.101.103`, but that address is treated only as runtime information because DHCP may change it.
+The previous Python/FastAPI Hub remains in the repository temporarily as a parity/reference implementation. Do not deploy the Python runtime for new H3 validation.
 
-## 1. Security and discovery model
-
-- Windows is the only place that reads ZCode and CommandCode sources.
-- Windows initiates outbound Hub requests; Hub never polls Windows.
-- Vendor credentials never leave Windows.
-- Hub ingestion uses one bearer token stored root-only on CentOS and in the Agent platform SecretStore on Windows.
-- Android does not receive the ingestion token.
-- Hub HTTP remains TCP `8787`.
-- LAN discovery uses UDP `8788` and advertises only `service`, schema version, Hub ID, HTTP scheme/port, and Hub version. It never advertises a bearer token.
-- `--lan-auto` must be selected explicitly; the safe default remains loopback-only.
-- UDP broadcast normally works only inside the same broadcast domain. Routed VLANs, AP client isolation, or firewall policy may require manual-address fallback.
-- Public Internet exposure is outside this design.
-
-## 2. CentOS prerequisites
-
-Required:
-
-- systemd;
-- Python 3.10+ with `venv`/`pip`;
-- the H3 validation bundle or repository checkout;
-- private-LAN reachability from Windows and Android;
-- permission to create the service user/unit and app/config/data directories.
-
-Installed paths:
+## 1. Architecture and security model
 
 ```text
-/usr/local/lib/ai-control-hub/venv       Python environment
-/etc/ai-control-hud/hub.env              root:root 0600; Hub token/config
-/var/lib/ai-control-hud/hub.sqlite3      persistent state/event log
-/etc/systemd/system/ai-control-hub.service
+Windows development machine        trusted LAN             CentOS Hub                Android HUD
+ZCode / CommandCode -> Go Agent  -------------------->  Go ai-control-hub  <-------  native Android
+                                  HTTP ingest               SQLite                     state/events/TTS
+                                  UDP discovery 8788
 ```
 
-The service runs as `ai-control-hub` with systemd hardening and write access only to `/var/lib/ai-control-hud`.
+- Windows remains the only machine that reads ZCode and CommandCode sources.
+- Windows initiates outbound Hub uploads; the Hub never polls Windows.
+- Vendor credentials never leave Windows.
+- Agent ingest uses a separate randomly generated bearer token.
+- Android never receives the ingest token.
+- Automatic LAN discovery advertises only service metadata; no credential or HUD state is included.
+- Public Internet exposure is outside this deployment model.
 
-## 3. Generate the ingestion token
+## 2. Files installed on CentOS
+
+```text
+/usr/local/lib/ai-control-hub/ai-control-hub   root-owned standalone Go binary
+/etc/ai-control-hud/hub.env                   root:root mode 0600; token/core config
+/var/lib/ai-control-hud/hub.sqlite3           persistent SQLite database
+/etc/systemd/system/ai-control-hub.service    hardened systemd unit
+```
+
+The process runs as the unprivileged `ai-control-hub` user. The unit keeps `ProtectSystem=strict`, `ProtectHome=true`, empty capabilities, `NoNewPrivileges=true`, and grants write access only to `/var/lib/ai-control-hud`.
+
+## 3. Network modes
+
+### Preferred: automatic trusted-LAN mode
+
+```bash
+--lan-auto
+```
+
+This explicitly enables:
+
+- HTTP on `0.0.0.0:8787`;
+- UDP discovery on `0.0.0.0:8788`;
+- clients using stable identities `auto://lan` and `http://auto.lan`.
+
+The physical DHCP address may currently be `192.168.101.103`, but that address must not be stored as the logical auto-mode identity.
+
+### Manual fallback
+
+For routed VLANs, AP client isolation, or a network that blocks broadcast:
+
+```bash
+--listen <FIXED_PRIVATE_IP>:8787
+```
+
+### Safe default
+
+Without `--lan-auto` or `--listen`, the installer renders loopback-only `127.0.0.1:8787`.
+
+## 4. Obtain the validation bundle
+
+Use the CI artifact named:
+
+```text
+ai-control-hub-h3-validation-bundle
+```
+
+The extracted bundle contains the prebuilt Linux binary, installer, docs, build metadata, and checksums. Verify before installation:
+
+```bash
+sha256sum -c SHA256SUMS
+chmod +x ./ai-control-hub
+./ai-control-hub version
+```
+
+If the executable cannot run, use the correct architecture artifact rather than installing a compiler or changing the host Python version.
+
+## 5. Generate the Hub ingestion token
+
+Generate a new project-internal token. This is **not** a CommandCode or ZCode credential.
 
 ```bash
 umask 077
@@ -48,41 +90,36 @@ openssl rand -hex 32 > "$HOME/ai-control-hub.token"
 chmod 600 "$HOME/ai-control-hub.token"
 ```
 
-Transfer the same temporary token file to Windows using an existing secure channel. Do not put it in Git, issues, screenshots, chat, or command-line literals. Delete plaintext import files after end-to-end validation.
+Transfer the same temporary file to Windows through a trusted channel. Never paste it into GitHub, chat, screenshots, or command-line literals.
 
-## 4. Preferred LAN-auto installation
+## 6. Install the Go Hub
 
-Inspect the unit:
+Inspect the auto-LAN unit first:
 
 ```bash
-bash scripts/ai-control-hub-systemd.sh render-unit --lan-auto --hub-id dorm-hub
+bash scripts/ai-control-hub-systemd.sh render-unit \
+  --lan-auto \
+  --hub-id dorm-hub
+```
+
+Confirm `ExecStart` is:
+
+```text
+/usr/local/lib/ai-control-hub/ai-control-hub serve --host 0.0.0.0 --port 8787
 ```
 
 Install:
 
 ```bash
 bash scripts/ai-control-hub-systemd.sh install \
-  --source "$PWD" \
+  --binary "$PWD/ai-control-hub" \
   --token-file "$HOME/ai-control-hub.token" \
   --lan-auto \
   --hub-id dorm-hub \
   --agent-id desktop-main
 ```
 
-`--lan-auto` explicitly does two things:
-
-1. binds Hub HTTP to `0.0.0.0:8787` on this trusted LAN host;
-2. starts the UDP discovery responder on port `8788`.
-
-The installer prints candidate LAN URLs when interfaces are already configured. Example current output may include:
-
-```text
-http://192.168.101.103:8787
-```
-
-That address is informational and can change.
-
-Installation enables service autostart but intentionally leaves it stopped for inspection:
+Installation enables the service for boot but intentionally does not start it immediately. Review:
 
 ```bash
 sudo systemctl cat ai-control-hub.service
@@ -91,13 +128,10 @@ sudo stat -c '%A %U:%G %n' /etc/ai-control-hud/hub.env /var/lib/ai-control-hud
 
 Expected:
 
-- `hub.env` is root-only (`0600`);
-- data directory belongs to `ai-control-hub`;
-- bearer token is absent from the unit;
-- `HUD_HUB_DISCOVERY_ENABLED=1`;
-- discovery port is `8788`.
-
-If `firewalld` or another host firewall is active, permit **TCP 8787** and **UDP 8788** only on the trusted/private interface or zone.
+- `hub.env` mode `0600`, owner `root:root`;
+- persistent data directory owned by `ai-control-hub`;
+- no bearer token inside the unit;
+- no Python/uvicorn/venv runtime in `ExecStart`.
 
 Start:
 
@@ -105,17 +139,43 @@ Start:
 bash scripts/ai-control-hub-systemd.sh start
 ```
 
-Direct sanity check using the currently observed address:
+Check direct HTTP through the currently observed LAN IP:
 
 ```bash
 curl -fsS http://<CURRENT_HUB_IP>:8787/api/v1/health
 ```
 
-Before the first Windows upload, `/health` can respond while `/state` is still unavailable.
+## 7. Migration from an already installed Python Hub
 
-## 5. Windows Agent auto-discovery
+The Go implementation intentionally preserves the Python Hub SQLite tables:
 
-From an elevated PowerShell in the Windows Agent directory:
+```text
+agents
+snapshots
+events
+idx_events_agent_seq
+```
+
+Default database path remains:
+
+```text
+/var/lib/ai-control-hud/hub.sqlite3
+```
+
+Therefore an existing Python Hub database is reused in place. The Go installer:
+
+1. stops the current `ai-control-hub.service`;
+2. preserves `/var/lib/ai-control-hud`;
+3. installs the Go binary;
+4. removes only the legacy `/usr/local/lib/ai-control-hub/venv`;
+5. replaces the unit with the Go `ExecStart`;
+6. leaves the existing database intact.
+
+Before a production migration, create a backup. Do not delete the database merely to switch runtimes.
+
+## 8. Configure Windows auto-discovery
+
+In elevated PowerShell:
 
 ```powershell
 .\ai-control-agent.exe hub configure `
@@ -126,9 +186,7 @@ From an elevated PowerShell in the Windows Agent directory:
 .\ai-control-agent.exe hub status
 ```
 
-The protected record stores `auto://lan`, the agent ID, and the bearer token; it does **not** store a DHCP IP.
-
-A successful status command reports both the stable configuration and current resolution, for example:
+Expected status includes the logical URL and current physical resolution:
 
 ```text
 url=auto://lan resolved=http://192.168.101.103:8787 hub=dorm-hub
@@ -141,117 +199,71 @@ Restart the service:
 .\ai-control-agent.exe service status
 ```
 
-In auto mode, the uploader caches the discovered address. If an HTTP request fails, it invalidates that physical address, broadcasts discovery again, and retries once against a newly discovered address. Local collection and durable event observation remain independent from discovery/network failures.
+When `/api/v1/state` becomes fresh, delete the temporary plaintext token file from Windows and CentOS.
 
-## 6. Android auto-discovery
+## 9. Android
 
-A fresh H7/H3 Android install defaults to the stable configured identity:
-
-```text
-http://auto.lan
-```
-
-This is an internal sentinel, not DNS. `StateClient` resolves it with the same UDP discovery protocol before HTTP requests.
-
-For an existing installation with an old manual server URL, open `SERVER`, enter:
+Fresh installations use automatic discovery by default. Existing installations can open `SERVER`, enter:
 
 ```text
 auto.lan
 ```
 
-and connect.
+and reconnect.
 
-The dashboard displays the actual resolved address:
+The dashboard displays the resolved address:
 
 ```text
-AUTO · http://192.168.101.103:8787
+AUTO · http://<CURRENT_HUB_IP>:8787
 ```
 
-When DHCP changes the server address, the app re-discovers after a request failure and updates this label. The event cursor remains keyed to the stable `auto.lan` identity, so changing the physical IP does not reset event history.
+The stable event cursor identity remains `http://auto.lan`, so a DHCP IP change does not look like a different Hub.
 
-## 7. Discovery limitations and manual fallback
-
-Automatic discovery is intentionally simple and local. It may not cross:
-
-- routed subnets/VLANs;
-- Wi-Fi client isolation;
-- networks that drop UDP broadcast;
-- host firewalls that block UDP `8788`.
-
-When that is intentional, use a fixed private address.
-
-CentOS:
-
-```bash
-bash scripts/ai-control-hub-systemd.sh install \
-  --source "$PWD" \
-  --token-file "$HOME/ai-control-hub.token" \
-  --listen <FIXED_PRIVATE_IP>:8787 \
-  --agent-id desktop-main
-```
-
-Windows:
-
-```powershell
-.\ai-control-agent.exe hub configure `
-  --hub-url http://<FIXED_PRIVATE_IP>:8787 `
-  --hub-agent-id desktop-main `
-  --hub-token-file C:\Temp\ai-control-hub.token
-```
-
-Android: configure `http://<FIXED_PRIVATE_IP>:8787`.
-
-## 8. Address-change acceptance test
-
-Before production sign-off, force one safe DHCP/address change if possible.
-
-Record old/new addresses. Do not edit Windows/Android Hub settings.
-
-PASS requires:
-
-- Windows upload resumes automatically at the new address;
-- `hub status` reports the new `resolved=` value;
-- Android polling resumes automatically;
-- Android displays the new actual Hub URL;
-- event cursor remains intact.
-
-If a forced address change is unsafe during initial validation, mark it `NOT RUN` and complete it before production sign-off.
-
-## 9. Hub status and logs
+## 10. Logs and status
 
 ```bash
 bash scripts/ai-control-hub-systemd.sh status
 sudo journalctl -u ai-control-hub.service --since today
+/usr/local/lib/ai-control-hub/ai-control-hub version
 ```
 
-Do not include bearer tokens or raw environment dumps in diagnostics.
+Do not include `hub.env`, bearer tokens, or complete process environments in diagnostics.
 
-## 10. Online-safe SQLite backup
+## 11. Online backup — Go only
 
-Do not raw-copy a live WAL-mode database and assume consistency. Use SQLite's backup API:
+Create a protected directory once:
 
 ```bash
 sudo install -d -o ai-control-hub -g ai-control-hub -m 0750 /var/lib/ai-control-hud/backups
+```
+
+Run a live backup:
+
+```bash
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 sudo -u ai-control-hub \
-  /usr/local/lib/ai-control-hub/venv/bin/ai-control-hub-backup \
+  /usr/local/lib/ai-control-hub/ai-control-hub backup \
   --database /var/lib/ai-control-hud/hub.sqlite3 \
   --output "/var/lib/ai-control-hud/backups/hub-${stamp}.sqlite3"
 ```
 
-The backup command runs an integrity check before publishing the backup and creates mode `0600` files.
+The command:
 
-## 11. Restore
+- refuses source=destination;
+- refuses overwrite;
+- uses SQLite `VACUUM INTO` to create a consistent database image while the Hub is live;
+- runs `PRAGMA integrity_check` on the result;
+- sets mode `0600`;
+- fsyncs and atomically publishes the file.
 
-Stop Hub first:
+Success prints `integrity=ok`.
+
+## 12. Restore
+
+Restore is a maintenance operation:
 
 ```bash
 bash scripts/ai-control-hub-systemd.sh stop
-```
-
-Preserve the current database if readable, then remove stale sidecars and install the validated backup:
-
-```bash
 sudo rm -f /var/lib/ai-control-hud/hub.sqlite3-wal /var/lib/ai-control-hud/hub.sqlite3-shm
 sudo install -o ai-control-hub -g ai-control-hub -m 0600 \
   /path/to/validated-backup.sqlite3 \
@@ -259,18 +271,18 @@ sudo install -o ai-control-hub -g ai-control-hub -m 0600 \
 bash scripts/ai-control-hub-systemd.sh start
 ```
 
-If the restored event log has a lower high-water mark, Android silently rebases its event cursor as designed.
+Then validate `/health`, `/state`, `/events`, Windows upload, and Android cursor behavior. A restore to a lower event high-water mark is handled by the existing Android silent-rebase logic.
 
-## 12. Bearer-token rotation
+## 13. Token rotation
 
-Generate and securely transfer a new token file. Rotate server token:
+Generate a new temporary token file, then on CentOS:
 
 ```bash
 bash scripts/ai-control-hub-systemd.sh rotate-token \
   --token-file "$HOME/ai-control-hub-next.token"
 ```
 
-Update only the Windows protected token; auto-discovery mode is preserved:
+On Windows:
 
 ```powershell
 .\ai-control-agent.exe hub configure `
@@ -278,27 +290,36 @@ Update only the Windows protected token; auto-discovery mode is preserved:
 .\ai-control-agent.exe service restart
 ```
 
-Validate new state/event delivery, then delete both new plaintext token files.
+The Agent durable outbox tolerates the brief 401 transition. Delete both temporary plaintext token files after confirming fresh state/event delivery.
 
-## 13. Outage/reboot acceptance
+## 14. DHCP/address-change validation
 
-### Windows shutdown
+When safe, change the CentOS LAN address without changing client configuration.
 
-Stop/shut down Windows. After the default 45-second stale threshold, Hub must retain last-known trustworthy values but project source state as `stale` and aggregate as `degraded`. Android must remain connected to Hub. Restarting Windows must restore fresh state without reconfiguration.
+Expected:
 
-### Hub/network outage
+- Windows upload fails against the old IP, re-discovers UDP 8788, and resumes on the new IP;
+- `hub status` shows the new `resolved=` address;
+- Android re-discovers and updates its displayed `AUTO · http://...` label;
+- event cursor remains continuous because the logical identity did not change.
 
-Stop Hub while Windows remains running, create one safe terminal task transition, then restart Hub. Local Windows `/api/v1/state` must remain usable and the durable event must catch up without a duplicate semantic event.
+## 15. Reboot validation
 
-### Android reconnect
+```bash
+sudo reboot
+```
 
-Disconnect/reconnect Android. New events resume from the persisted cursor; old (>10 minute) backlog is summarized rather than spoken event-by-event.
+After the host returns:
 
-### CentOS reboot
+```bash
+systemctl is-enabled ai-control-hub.service
+systemctl is-active ai-control-hub.service
+/usr/local/lib/ai-control-hub/ai-control-hub version
+```
 
-After reboot, systemd autostarts Hub. If DHCP returns a different address, Windows/Android must re-discover it automatically.
+The database must persist and clients must resume without manual IP editing.
 
-## 14. Removal
+## 16. Removal
 
 Remove only the systemd registration while preserving app/config/data:
 
