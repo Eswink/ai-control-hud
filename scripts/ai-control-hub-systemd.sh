@@ -33,6 +33,7 @@ Usage:
 Go Hub deployment:
   * CentOS does not need Python, pip, venv, or a Go toolchain
   * install consumes the prebuilt Linux ai-control-hub binary from the validation/release bundle
+  * an old /usr/local/lib/ai-control-hub/venv from the Python Hub is removed during install
 
 Security defaults:
   * listen defaults to 127.0.0.1:8787
@@ -268,6 +269,7 @@ case "$ACTION" in
     sudo install -d -o root -g root -m 0755 "$CONFIG_DIR"
 
     sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    sudo rm -rf "$INSTALL_DIR/venv"
     sudo install -o root -g root -m 0755 "$binary_abs" "$BINARY_PATH"
 
     env_tmp="$(mktemp)"
