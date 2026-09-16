@@ -22,6 +22,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ai-control-hub-systemd.sh install --source REPO_ROOT --token-file PATH [--listen HOST:PORT] [--agent-id ID] [--python PATH]
+  ai-control-hub-systemd.sh rotate-token --token-file PATH
   ai-control-hub-systemd.sh render-unit [--listen HOST:PORT]
   ai-control-hub-systemd.sh start|stop|restart|status
   ai-control-hub-systemd.sh remove [--purge] [--purge-data]
@@ -30,6 +31,7 @@ Security defaults:
   * listen defaults to 127.0.0.1:8787
   * the token file is imported into /etc/ai-control-hud/hub.env (0600, root-only)
   * SQLite state lives in /var/lib/ai-control-hud and is preserved on normal removal
+  * token rotation never accepts a bearer token on the command line
   * --purge-data requires --purge and permanently deletes the Hub database
 EOF
 }
@@ -66,6 +68,41 @@ validate_listen() {
     echo "--listen port must be within 1..65535" >&2
     exit 2
   fi
+}
+
+validate_agent_id() {
+  local value="$1"
+  [[ "$value" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || {
+    echo "agent id contains unsupported characters" >&2
+    exit 2
+  }
+}
+
+read_token_file() {
+  local path="$1"
+  [[ -n "$path" && -f "$path" ]] || {
+    echo "--token-file must point to a readable token file" >&2
+    exit 2
+  }
+  local value
+  value="$(cat "$path")"
+  [[ ! "$value" =~ $'\n' && ! "$value" =~ $'\r' ]] || {
+    echo "hub token must be a single line" >&2
+    unset value
+    exit 2
+  }
+  (( ${#value} >= 32 && ${#value} <= 512 )) || {
+    echo "hub token length must be within 32..512 characters" >&2
+    unset value
+    exit 2
+  }
+  [[ "$value" =~ ^[A-Za-z0-9._~-]+$ ]] || {
+    echo "hub token must use URL-safe printable characters" >&2
+    unset value
+    exit 2
+  }
+  printf '%s' "$value"
+  unset value
 }
 
 listen_host() {
@@ -118,9 +155,30 @@ WantedBy=multi-user.target
 EOF
 }
 
+write_env_temp() {
+  local path="$1"
+  local token="$2"
+  local agent_id="$3"
+  local database="$4"
+  local stale_after="$5"
+  umask 077
+  cat >"$path" <<EOF
+HUD_HUB_DB=$database
+HUD_HUB_AGENT_ID=$agent_id
+HUD_HUB_AGENT_TOKEN=$token
+HUD_HUB_STALE_AFTER_SECONDS=$stale_after
+EOF
+  chmod 0600 "$path"
+}
+
 require_systemd() {
   command -v systemctl >/dev/null 2>&1 || { echo "systemctl is unavailable" >&2; exit 1; }
   [[ -d /run/systemd/system ]] || { echo "systemd is not the active service manager" >&2; exit 1; }
+}
+
+read_env_value() {
+  local key="$1"
+  sudo sed -n "s/^${key}=//p" "$ENV_PATH" | tail -n 1
 }
 
 case "$ACTION" in
@@ -130,9 +188,8 @@ case "$ACTION" in
   install)
     require_systemd
     validate_listen "$LISTEN"
+    validate_agent_id "$AGENT_ID"
     [[ -n "$SOURCE" ]] || { echo "--source is required" >&2; exit 2; }
-    [[ -n "$TOKEN_FILE" && -f "$TOKEN_FILE" ]] || { echo "--token-file must point to a readable token file" >&2; exit 2; }
-    [[ "$AGENT_ID" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || { echo "--agent-id contains unsupported characters" >&2; exit 2; }
     command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "Python interpreter is unavailable: $PYTHON_BIN" >&2; exit 1; }
 
     source_abs="$(cd "$SOURCE" && pwd)"
@@ -140,11 +197,7 @@ case "$ACTION" in
       echo "--source must be the ai-control-hud repository root" >&2
       exit 2
     }
-
-    token="$(cat "$TOKEN_FILE")"
-    [[ ! "$token" =~ $'\n' && ! "$token" =~ $'\r' ]] || { echo "hub token must be a single line" >&2; exit 2; }
-    (( ${#token} >= 32 && ${#token} <= 512 )) || { echo "hub token length must be within 32..512 characters" >&2; exit 2; }
-    [[ "$token" =~ ^[A-Za-z0-9._~-]+$ ]] || { echo "hub token must use URL-safe printable characters" >&2; exit 2; }
+    token="$(read_token_file "$TOKEN_FILE")"
 
     if ! id "$SERVICE_USER" >/dev/null 2>&1; then
       sudo useradd --system --home-dir "$DATA_DIR" --shell /sbin/nologin "$SERVICE_USER"
@@ -161,14 +214,7 @@ case "$ACTION" in
     env_tmp="$(mktemp)"
     unit_tmp="$(mktemp)"
     trap 'rm -f "$env_tmp" "$unit_tmp"; unset token' EXIT
-    umask 077
-    cat >"$env_tmp" <<EOF
-HUD_HUB_DB=$DATA_DIR/hub.sqlite3
-HUD_HUB_AGENT_ID=$AGENT_ID
-HUD_HUB_AGENT_TOKEN=$token
-HUD_HUB_STALE_AFTER_SECONDS=45
-EOF
-    chmod 0600 "$env_tmp"
+    write_env_temp "$env_tmp" "$token" "$AGENT_ID" "$DATA_DIR/hub.sqlite3" "45"
     render_unit >"$unit_tmp"
 
     sudo install -o root -g root -m 0600 "$env_tmp" "$ENV_PATH"
@@ -181,6 +227,35 @@ EOF
     unset token
     echo "[hub-systemd] installed service=$SERVICE_NAME listen=$LISTEN data=$DATA_DIR"
     echo "[hub-systemd] service is enabled but not started; run '$0 start' after network/firewall validation"
+    echo "[hub-systemd] plaintext token file was not modified; delete it after end-to-end validation"
+    ;;
+  rotate-token)
+    require_systemd
+    [[ -f "$ENV_PATH" ]] || { echo "Hub environment file is missing: $ENV_PATH" >&2; exit 1; }
+    token="$(read_token_file "$TOKEN_FILE")"
+    database="$(read_env_value HUD_HUB_DB)"
+    agent_id="$(read_env_value HUD_HUB_AGENT_ID)"
+    stale_after="$(read_env_value HUD_HUB_STALE_AFTER_SECONDS)"
+    [[ -n "$database" && -n "$agent_id" && -n "$stale_after" ]] || {
+      unset token
+      echo "Hub environment file is incomplete" >&2
+      exit 1
+    }
+    validate_agent_id "$agent_id"
+    [[ "$stale_after" =~ ^[0-9]+$ ]] || { unset token; echo "Hub stale threshold is invalid" >&2; exit 1; }
+
+    env_tmp="$(mktemp)"
+    trap 'rm -f "$env_tmp"; unset token' EXIT
+    write_env_temp "$env_tmp" "$token" "$agent_id" "$database" "$stale_after"
+    sudo install -o root -g root -m 0600 "$env_tmp" "$ENV_PATH.new"
+    sudo mv -f "$ENV_PATH.new" "$ENV_PATH"
+    unset token
+    if sudo systemctl is-active --quiet "$SERVICE_NAME"; then
+      sudo systemctl restart "$SERVICE_NAME"
+      echo "[hub-systemd] token rotated and active Hub restarted"
+    else
+      echo "[hub-systemd] token rotated; Hub was not active and remains stopped"
+    fi
     echo "[hub-systemd] plaintext token file was not modified; delete it after end-to-end validation"
     ;;
   start)
