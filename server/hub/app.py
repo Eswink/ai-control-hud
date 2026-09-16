@@ -184,9 +184,17 @@ def create_hub_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=100),
     ) -> EventPage:
-        events = hub_store.list_events(config.primary_agent_id, after, limit)
+        events, latest_seq = hub_store.list_events_with_latest(
+            config.primary_agent_id,
+            after,
+            limit,
+        )
         next_after = events[-1].seq if events else after
-        return EventPage(events=events, next_after=next_after)
+        return EventPage(
+            events=events,
+            next_after=next_after,
+            latest_seq=latest_seq,
+        )
 
     return app
 
