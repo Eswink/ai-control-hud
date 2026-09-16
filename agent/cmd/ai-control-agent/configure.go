@@ -27,6 +27,7 @@ func runConfigure(args []string) error {
 	listen := flags.String("listen", "127.0.0.1:8787", "HTTP listen address")
 	runtimeDB := flags.String("runtime-db", "", "ZCode runtime Goal database")
 	taskIndexDB := flags.String("task-index-db", "", "ZCode task index database")
+	hubFlags := addHubSecretFlags(flags)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -93,6 +94,11 @@ func runConfigure(args []string) error {
 		}
 	}
 
+	hubSecretPath, hubConfigured, hubTokenImported, err := configureProtectedHubSecret(flags, resolvedConfig, hubFlags)
+	if err != nil {
+		return err
+	}
+
 	config := machineconfig.New(listenValue, resolvedRuntime, resolvedTaskIndex, secretPath)
 	if err := machineconfig.Save(resolvedConfig, config); err != nil {
 		return err
@@ -104,6 +110,16 @@ func runConfigure(args []string) error {
 		fmt.Println("[configure] CommandCode credential imported to platform SecretStore")
 	} else {
 		fmt.Println("[configure] existing platform SecretStore reused")
+	}
+	if hubConfigured {
+		fmt.Printf("[configure] hub-credential=%s\n", hubSecretPath)
+		if hubTokenImported {
+			fmt.Println("[configure] hub token imported to platform SecretStore; delete the plaintext token file after validation")
+		} else {
+			fmt.Println("[configure] existing protected hub credential reused or updated")
+		}
+	} else {
+		fmt.Println("[configure] protected hub credential=not configured; environment-based hub configuration remains available")
 	}
 	return nil
 }
