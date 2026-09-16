@@ -131,6 +131,18 @@ func TestEventTypeMustAgreeWithTerminalStatus(t *testing.T) {
 	}
 }
 
+func TestSQLiteTimestampFormatMatchesPythonISOFormat(t *testing.T) {
+	value := time.Date(2026, 9, 16, 12, 34, 56, 123456789, time.UTC)
+	got := formatTime(value)
+	want := "2026-09-16T12:34:56.123456789+00:00"
+	if got != want {
+		t.Fatalf("formatTime=%q want %q", got, want)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, got); err != nil {
+		t.Fatalf("Go cannot parse its Python-compatible timestamp %q: %v", got, err)
+	}
+}
+
 func completedEvent(eventID, taskID string, when time.Time) events.Event {
 	return events.Event{
 		EventID:    eventID,
