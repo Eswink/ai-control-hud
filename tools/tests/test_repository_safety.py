@@ -75,10 +75,12 @@ def test_environment_and_dpapi_artifacts_are_rejected(tmp_path: Path) -> None:
 
 
 def test_private_key_material_is_rejected_even_in_text_file(tmp_path: Path) -> None:
+    begin = "-----BEGIN " + "PRIVATE" + " KEY-----"
+    end = "-----END " + "PRIVATE" + " KEY-----"
     repo = init_repo(
         tmp_path,
         {
-            "notes.txt": "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
+            "notes.txt": begin + "\nnot-a-real-key\n" + end + "\n",
         },
     )
     result = run_guard(repo)
