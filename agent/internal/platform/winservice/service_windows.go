@@ -127,10 +127,18 @@ func Remove(name string) error {
 		return fmt.Errorf("open service: %w", err)
 	}
 	defer service.Close()
-	status, queryErr := service.Query()
-	if queryErr == nil && status.State != svc.Stopped {
-		_, _ = service.Control(svc.Stop)
-		_ = waitState(service, svc.Stopped, 20*time.Second)
+
+	status, err := service.Query()
+	if err != nil {
+		return fmt.Errorf("query service before removal: %w", err)
+	}
+	if status.State != svc.Stopped {
+		if _, err := service.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+			return fmt.Errorf("stop service before removal: %w", err)
+		}
+		if err := waitState(service, svc.Stopped, 20*time.Second); err != nil {
+			return fmt.Errorf("wait for service stop before removal: %w", err)
+		}
 	}
 	if err := service.Delete(); err != nil {
 		return fmt.Errorf("remove service: %w", err)
