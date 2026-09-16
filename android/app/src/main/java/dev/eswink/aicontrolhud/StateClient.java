@@ -11,50 +11,89 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 final class StateClient {
+    static final String AUTO_BASE_URL = "http://auto.lan";
+
     private static final int CONNECT_TIMEOUT_MS = 2500;
     private static final int READ_TIMEOUT_MS = 2500;
+    private static final int DISCOVERY_TIMEOUT_MS = 1600;
+
+    private final HubDiscovery discovery = new HubDiscovery();
+    private String resolvedAutoBaseUrl;
+    private static volatile String lastResolvedAutoBaseUrl;
 
     StateSnapshot fetchState(String baseUrl) throws Exception {
-        HttpURLConnection connection = open(baseUrl + "/api/v1/state");
-        try {
-            int code = connection.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) throw new IOException("state HTTP " + code);
-            return StateSnapshot.parse(readAll(connection.getInputStream()));
-        } finally {
-            connection.disconnect();
-        }
+        return StateSnapshot.parse(get(baseUrl, "/api/v1/state"));
     }
 
     EventPage fetchEvents(String baseUrl, long after, int limit) throws Exception {
         if (after < 0) throw new IllegalArgumentException("event cursor must be non-negative");
         if (limit < 1 || limit > 100) throw new IllegalArgumentException("event page limit must be 1..100");
 
-        HttpURLConnection connection = open(
-                baseUrl + "/api/v1/events?after=" + after + "&limit=" + limit
-        );
+        EventPage page = EventPage.parse(new JSONObject(get(
+                baseUrl,
+                "/api/v1/events?after=" + after + "&limit=" + limit
+        )));
+        return page.validateForRequest(after);
+    }
+
+    void checkHealth(String baseUrl) throws Exception {
+        JSONObject body = new JSONObject(get(baseUrl, "/api/v1/health"));
+        int schema = body.getInt("schemaVersion");
+        if (schema != StateSnapshot.SUPPORTED_SCHEMA) {
+            throw new StateSnapshot.IncompatibleSchemaException(schema);
+        }
+    }
+
+    private String get(String configuredBaseUrl, String path) throws Exception {
+        String resolved = resolveBaseUrl(configuredBaseUrl);
+        try {
+            return getAt(resolved, path);
+        } catch (Exception first) {
+            if (!AUTO_BASE_URL.equals(configuredBaseUrl)) throw first;
+            invalidateAutoResolution(resolved);
+            String rediscovered = resolveBaseUrl(configuredBaseUrl);
+            if (rediscovered.equals(resolved)) throw first;
+            return getAt(rediscovered, path);
+        }
+    }
+
+    private String getAt(String baseUrl, String path) throws Exception {
+        HttpURLConnection connection = open(baseUrl + path);
         try {
             int code = connection.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) throw new IOException("events HTTP " + code);
-            EventPage page = EventPage.parse(new JSONObject(readAll(connection.getInputStream())));
-            return page.validateForRequest(after);
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw new IOException(path + " HTTP " + code);
+            }
+            return readAll(connection.getInputStream());
         } finally {
             connection.disconnect();
         }
     }
 
-    void checkHealth(String baseUrl) throws Exception {
-        HttpURLConnection connection = open(baseUrl + "/api/v1/health");
-        try {
-            int code = connection.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) throw new IOException("health HTTP " + code);
-            JSONObject body = new JSONObject(readAll(connection.getInputStream()));
-            int schema = body.getInt("schemaVersion");
-            if (schema != StateSnapshot.SUPPORTED_SCHEMA) {
-                throw new StateSnapshot.IncompatibleSchemaException(schema);
-            }
-        } finally {
-            connection.disconnect();
+    private synchronized String resolveBaseUrl(String configuredBaseUrl) throws IOException {
+        if (!AUTO_BASE_URL.equals(configuredBaseUrl)) return configuredBaseUrl;
+        if (resolvedAutoBaseUrl != null && !resolvedAutoBaseUrl.isEmpty()) return resolvedAutoBaseUrl;
+        HubDiscovery.Result result = discovery.discover(DISCOVERY_TIMEOUT_MS);
+        resolvedAutoBaseUrl = result.baseUrl;
+        lastResolvedAutoBaseUrl = result.baseUrl;
+        return resolvedAutoBaseUrl;
+    }
+
+    private synchronized void invalidateAutoResolution(String expected) {
+        if (expected != null && expected.equals(resolvedAutoBaseUrl)) {
+            resolvedAutoBaseUrl = null;
         }
+    }
+
+    static String displayServer(String configuredText) {
+        if (configuredText == null) return "";
+        if (!configuredText.startsWith(AUTO_BASE_URL)) return configuredText;
+        String suffix = configuredText.substring(AUTO_BASE_URL.length());
+        String resolved = lastResolvedAutoBaseUrl;
+        if (resolved == null || resolved.isEmpty()) {
+            return "AUTO · discovering…" + suffix;
+        }
+        return "AUTO · " + resolved + suffix;
     }
 
     private HttpURLConnection open(String address) throws IOException {
