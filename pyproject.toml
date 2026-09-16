@@ -13,6 +13,9 @@ dependencies = [
   "uvicorn>=0.30,<1",
 ]
 
+[project.scripts]
+ai-control-hub-backup = "tools.hub_backup:main"
+
 [project.optional-dependencies]
 dev = [
   "httpx>=0.27,<1",
