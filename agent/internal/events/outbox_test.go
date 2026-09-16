@@ -220,6 +220,10 @@ func TestStaleSnapshotsDoNotAdvanceEventBaseline(t *testing.T) {
 func stateWithTasks(now time.Time, tasks ...domain.TaskSummary) domain.HudState {
 	state := agentruntime.InitialState(now, "test", true, false)
 	lastSuccess := now
+	normalizedTasks := tasks
+	if normalizedTasks == nil {
+		normalizedTasks = []domain.TaskSummary{}
+	}
 	state.ZCode = domain.ZCodeState{
 		Health: domain.SourceHealth{
 			Status:        domain.SourceOK,
@@ -227,7 +231,7 @@ func stateWithTasks(now time.Time, tasks ...domain.TaskSummary) domain.HudState 
 			LastSuccessAt: &lastSuccess,
 		},
 		Summary: &domain.ZCodeSummary{},
-		Tasks:   tasks,
+		Tasks:   normalizedTasks,
 	}
 	return state
 }
