@@ -7,6 +7,8 @@ on:
       - 'server/**'
       - 'tools/**'
       - 'scripts/**'
+      - 'docs/H3_FIELD_VALIDATION.md'
+      - 'docs/HUB_DEPLOYMENT.md'
       - '.github/workflows/python.yml'
   pull_request:
     paths:
@@ -14,6 +16,8 @@ on:
       - 'server/**'
       - 'tools/**'
       - 'scripts/**'
+      - 'docs/H3_FIELD_VALIDATION.md'
+      - 'docs/HUB_DEPLOYMENT.md'
       - '.github/workflows/python.yml'
   workflow_dispatch:
 
@@ -47,12 +51,24 @@ jobs:
         run: ai-control-hub-backup --help
 
       - name: Compile helper scripts
-        run: python -m py_compile scripts/g4_state_db.py scripts/backup_hub_db.py
+        run: python -m py_compile scripts/g4_state_db.py scripts/backup_hub_db.py scripts/package-h3-validation.py
 
       - name: Validate Hub deployment assets
         if: runner.os == 'Linux'
         shell: bash
         run: bash ./scripts/ci-hub-deployment-smoke.sh
+
+      - name: Build H3 validation bundle
+        if: runner.os == 'Linux'
+        run: python scripts/package-h3-validation.py --output dist/ai-control-hub-h3-validation.zip
+
+      - name: Upload H3 validation bundle
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hub-h3-validation-bundle
+          path: dist/ai-control-hub-h3-validation.zip
+          if-no-files-found: error
 
       - name: Validate PowerShell syntax
         if: runner.os == 'Windows'
