@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/fileacl"
@@ -37,11 +39,20 @@ func (c Config) Validate() error {
 	if c.SchemaVersion != schemaVersion {
 		return fmt.Errorf("unsupported machine config schema version %d", c.SchemaVersion)
 	}
-	if strings.TrimSpace(c.Listen) == "" {
+	listen := strings.TrimSpace(c.Listen)
+	if listen == "" {
 		return errors.New("machine config listen address is missing")
+	}
+	if _, portText, err := net.SplitHostPort(listen); err != nil {
+		return errors.New("machine config listen address is invalid")
+	} else if port, parseErr := strconv.Atoi(portText); parseErr != nil || port < 1 || port > 65535 {
+		return errors.New("machine config listen port is invalid")
 	}
 	if c.ZCodeRuntimeDB == "" && c.ZCodeTaskIndexDB == "" {
 		return errors.New("machine config has no ZCode database path")
+	}
+	if c.CommandCodeSecret == "" {
+		return errors.New("machine config CommandCode secret path is missing")
 	}
 	for label, value := range map[string]string{
 		"zcode runtime database": c.ZCodeRuntimeDB,
