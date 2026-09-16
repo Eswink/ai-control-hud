@@ -43,6 +43,9 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Verify installed Hub backup command
+        run: ai-control-hub-backup --help
+
       - name: Compile helper scripts
         run: python -m py_compile scripts/g4_state_db.py scripts/backup_hub_db.py
 
