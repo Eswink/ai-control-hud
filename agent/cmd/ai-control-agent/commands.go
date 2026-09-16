@@ -88,38 +88,70 @@ func serviceInstall(args []string) error {
 		return statusErr
 	}
 
+	resolvedConfig := absolute(*configPath)
+	existingConfig, existingErr := machineconfig.Load(resolvedConfig)
+	hasExistingConfig := existingErr == nil
+	if existingErr != nil && !errors.Is(existingErr, os.ErrNotExist) {
+		return fmt.Errorf("load existing machine config: %w", existingErr)
+	}
+
 	resolvedRuntime, resolvedTaskIndex, err := zcode.ResolvedPaths()
 	if err != nil {
 		return fmt.Errorf("resolve ZCode paths: %w", err)
 	}
-	if strings.TrimSpace(*runtimeDB) != "" {
+	listenValue := *listen
+	if hasExistingConfig {
+		if !flagProvided(flags, "listen") {
+			listenValue = existingConfig.Listen
+		}
+		if !flagProvided(flags, "runtime-db") && existingConfig.ZCodeRuntimeDB != "" {
+			resolvedRuntime = existingConfig.ZCodeRuntimeDB
+		}
+		if !flagProvided(flags, "task-index-db") && existingConfig.ZCodeTaskIndexDB != "" {
+			resolvedTaskIndex = existingConfig.ZCodeTaskIndexDB
+		}
+	}
+	if flagProvided(flags, "runtime-db") {
 		resolvedRuntime = absolute(*runtimeDB)
 	}
-	if strings.TrimSpace(*taskIndexDB) != "" {
+	if flagProvided(flags, "task-index-db") {
 		resolvedTaskIndex = absolute(*taskIndexDB)
 	}
 	if !fileExists(resolvedRuntime) && !fileExists(resolvedTaskIndex) {
 		return errors.New("no readable ZCode database found for service installation")
 	}
 
-	providerPath := absolute(*providerConfig)
-	provider, err := commandcode.LoadProvider(providerPath, "")
-	if err != nil {
-		return err
+	secretPath := machineconfig.DefaultSecretPath(resolvedConfig)
+	if hasExistingConfig && existingConfig.CommandCodeSecret != "" {
+		secretPath = existingConfig.CommandCodeSecret
 	}
-	if err := commandcode.ValidateProvider(provider, false); err != nil {
-		return err
+	providerPath := absolute(*providerConfig)
+	importedCredential := false
+	if fileExists(providerPath) {
+		provider, loadErr := commandcode.LoadProvider(providerPath, "")
+		if loadErr != nil {
+			return loadErr
+		}
+		if err := commandcode.ValidateProvider(provider, false); err != nil {
+			return err
+		}
+		record := secretstore.Record{ProviderID: provider.ID, BaseURL: provider.BaseURL, APIKey: provider.APIKey}
+		if err := secretstore.Write(secretPath, record); err != nil {
+			return fmt.Errorf("write platform SecretStore: %w", err)
+		}
+		importedCredential = true
+	} else {
+		record, readErr := secretstore.Read(secretPath)
+		if readErr != nil {
+			return fmt.Errorf("provider import file is unavailable and existing SecretStore cannot be read: %w", readErr)
+		}
+		if err := commandcode.ValidateProvider(providerFromSecret(record), false); err != nil {
+			return err
+		}
 	}
 
-	resolvedConfig := absolute(*configPath)
-	secretPath := machineconfig.DefaultSecretPath(resolvedConfig)
-	record := secretstore.Record{ProviderID: provider.ID, BaseURL: provider.BaseURL, APIKey: provider.APIKey}
-	if err := secretstore.Write(secretPath, record); err != nil {
-		return fmt.Errorf("write platform SecretStore: %w", err)
-	}
-	config := machineconfig.New(*listen, resolvedRuntime, resolvedTaskIndex, secretPath)
+	config := machineconfig.New(listenValue, resolvedRuntime, resolvedTaskIndex, secretPath)
 	if err := machineconfig.Save(resolvedConfig, config); err != nil {
-		_ = secretstore.Remove(secretPath)
 		return err
 	}
 
@@ -132,14 +164,10 @@ func serviceInstall(args []string) error {
 		return err
 	}
 	if err := copyExecutable(absolute(sourceExecutable), targetExecutable); err != nil {
-		_ = os.Remove(resolvedConfig)
-		_ = secretstore.Remove(secretPath)
 		return err
 	}
 	if err := winservice.Install(windowsServiceName, windowsServiceDisplayName, windowsServiceDescription, targetExecutable, resolvedConfig); err != nil {
 		_ = os.Remove(targetExecutable)
-		_ = os.Remove(resolvedConfig)
-		_ = secretstore.Remove(secretPath)
 		return err
 	}
 
@@ -148,8 +176,12 @@ func serviceInstall(args []string) error {
 	fmt.Printf("[service] config=%s\n", resolvedConfig)
 	fmt.Printf("[service] zcode-runtime=%s\n", resolvedRuntime)
 	fmt.Printf("[service] zcode-task-index=%s\n", resolvedTaskIndex)
-	fmt.Println("[service] CommandCode credential imported to Windows DPAPI SecretStore")
-	fmt.Println("[service] plaintext provider import file was not modified; remove it only after service validation")
+	if importedCredential {
+		fmt.Println("[service] CommandCode credential imported to Windows DPAPI SecretStore")
+		fmt.Println("[service] plaintext provider import file was not modified; remove it only after service validation")
+	} else {
+		fmt.Println("[service] existing Windows DPAPI SecretStore reused; plaintext provider import is no longer required")
+	}
 	return nil
 }
 
@@ -363,6 +395,16 @@ func copyExecutable(source, target string) error {
 	}
 	committed = true
 	return nil
+}
+
+func flagProvided(flags *flag.FlagSet, name string) bool {
+	provided := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == name {
+			provided = true
+		}
+	})
+	return provided
 }
 
 func doctorFailure(check string, err error) error {
