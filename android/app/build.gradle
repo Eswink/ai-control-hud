@@ -2,6 +2,20 @@ plugins {
     id 'com.android.application'
 }
 
+def releaseSigningValues = [
+    keystorePath: System.getenv('HUD_ANDROID_KEYSTORE_PATH'),
+    storePassword: System.getenv('HUD_ANDROID_KEYSTORE_PASSWORD'),
+    keyAlias: System.getenv('HUD_ANDROID_KEY_ALIAS'),
+    keyPassword: System.getenv('HUD_ANDROID_KEY_PASSWORD'),
+]
+def releaseSigningCount = releaseSigningValues.values().count { value ->
+    value != null && !value.trim().isEmpty()
+}
+def releaseSigningConfigured = releaseSigningCount == releaseSigningValues.size()
+if (releaseSigningCount > 0 && !releaseSigningConfigured) {
+    throw new GradleException('Android release signing is partially configured; provide all HUD_ANDROID_* signing variables')
+}
+
 android {
     namespace 'dev.eswink.aicontrolhud'
     compileSdk 35
@@ -14,6 +28,17 @@ android {
         versionName '0.1.0-dev'
     }
 
+    if (releaseSigningConfigured) {
+        signingConfigs {
+            release {
+                storeFile file(releaseSigningValues.keystorePath)
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -23,6 +48,9 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
