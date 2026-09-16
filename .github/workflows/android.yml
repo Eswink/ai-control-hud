@@ -92,22 +92,30 @@ jobs:
             -noprompt
           chmod 600 "${RUNNER_TEMP}/ci-release.jks"
 
-      - name: Build signed release with ephemeral key
+      - name: Build signed release with ephemeral key and injected version
         working-directory: android
         env:
           HUD_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/ci-release.jks
           HUD_ANDROID_KEYSTORE_PASSWORD: changeit
           HUD_ANDROID_KEY_ALIAS: ci
           HUD_ANDROID_KEY_PASSWORD: changeit
+          HUD_ANDROID_VERSION_NAME: 0.0.0-ci
+          HUD_ANDROID_VERSION_CODE: '900001'
         run: gradle --no-daemon :app:assembleRelease
 
-      - name: Verify and scan ephemeral signed release
+      - name: Verify signed release, version metadata, and secret scan
         shell: bash
+        env:
+          EXPECTED_VERSION_NAME: 0.0.0-ci
+          EXPECTED_VERSION_CODE: '900001'
         run: |
           set -euo pipefail
           apk='android/app/build/outputs/apk/release/app-release.apk'
           test -f "$apk"
           "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk"
+          badging="$("${ANDROID_HOME}/build-tools/35.0.0/aapt" dump badging "$apk" | head -n 1)"
+          grep -F "versionCode='${EXPECTED_VERSION_CODE}'" <<<"$badging"
+          grep -F "versionName='${EXPECTED_VERSION_NAME}'" <<<"$badging"
           python3 scripts/ci-android-apk-secret-scan.py "$apk"
 
       - name: Remove ephemeral CI release key
