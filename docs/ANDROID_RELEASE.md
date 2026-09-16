@@ -1,10 +1,10 @@
 # Android release signing
 
-The normal pull-request Android build does not require or receive release-signing secrets. Signed release APKs are produced only by `.github/workflows/android-release.yml` on a `v*` tag or an explicit `workflow_dispatch` run.
+The normal pull-request Android build does not require or receive release-signing secrets. Production-signed release APKs are produced only by `.github/workflows/android-release.yml` on a `v*` tag or an explicit `workflow_dispatch` run.
 
 ## Required GitHub Secrets
 
-Configure these repository/environment secrets before running a signed release:
+Configure these repository/environment secrets before running a production-signed release:
 
 ```text
 HUD_ANDROID_KEYSTORE_BASE64
@@ -17,30 +17,42 @@ HUD_ANDROID_KEY_PASSWORD
 
 The repository `.gitignore` excludes common keystore/private-key extensions including `.jks`, `.keystore`, `.p12`, `.pfx`, `.pem`, and `.key`.
 
-## Workflow behavior
+## Pull-request release gate
 
-### Pull requests
+The existing Android CI validates both unsigned and signed release code paths without using repository secrets.
 
-The release workflow builds an **unsigned** release variant with no signing secrets:
+First it builds:
 
 ```text
+:app:lintDebug
+:app:testDebugUnitTest
+:app:assembleDebug
 :app:lintRelease
 :app:testReleaseUnitTest
 :app:assembleRelease
 ```
 
-It then scans the generated APK for known AI Control HUD credential/local-state artifacts. This validates the release build configuration without exposing release credentials to pull requests.
+With no signing environment present, the release output is unsigned. CI scans both the debug APK and this unsigned release APK for known AI Control HUD credential/local-state artifacts.
 
-The normal Android CI also scans the debug APK.
+CI then creates a short-lived **ephemeral test keystore** with `keytool`, sets the same `HUD_ANDROID_*` Gradle environment contract used by production signing, rebuilds the release APK, and verifies it with Android `apksigner`.
 
-### Tag/manual release
+The ephemeral key:
 
-For a `v*` tag or manual run:
+- is generated inside the GitHub-hosted runner;
+- is not a repository secret or production credential;
+- is never uploaded as an artifact;
+- is removed in an `if: always()` cleanup step.
+
+This exercises the actual Gradle release-signing configuration on every relevant pull request while keeping real signing credentials unavailable to PR jobs.
+
+## Tag/manual production release
+
+For a `v*` tag or manual `.github/workflows/android-release.yml` run:
 
 1. all four signing secrets must be present;
 2. the base64 keystore is decoded only into `$RUNNER_TEMP/ai-control-hud-release.jks`;
 3. Gradle receives the temporary keystore path and passwords through environment variables;
-4. the project builds the release variant;
+4. the project runs release lint, unit tests, and `assembleRelease`;
 5. Android `apksigner verify --verbose --print-certs` verifies the produced APK;
 6. the credential/local-state scanner runs against the signed APK;
 7. a SHA256 file is generated next to the APK;
@@ -81,4 +93,4 @@ This is a targeted release guard, not a general malware/secret scanner. The prim
 
 ## Reproducibility definition
 
-The release gate uses pinned JDK/Android SDK/Gradle versions and a stable signing procedure, and every produced release APK gets a SHA256 manifest. The project does **not** currently claim byte-for-byte reproducible Android APK output across independent builds; that would require a separate verified reproducible-build effort.
+The release gate uses pinned JDK/Android SDK/Gradle versions and a stable signing procedure, and every production release APK gets a SHA256 manifest. The project does **not** currently claim byte-for-byte reproducible Android APK output across independent builds; that would require a separate verified reproducible-build effort.
