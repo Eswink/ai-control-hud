@@ -4,7 +4,7 @@ set -euo pipefail
 SERVICE_NAME="ai-control-hub.service"
 SERVICE_USER="ai-control-hub"
 INSTALL_DIR="/usr/local/lib/ai-control-hub"
-VENV_DIR="$INSTALL_DIR/venv"
+BINARY_PATH="$INSTALL_DIR/ai-control-hub"
 DATA_DIR="/var/lib/ai-control-hud"
 CONFIG_DIR="/etc/ai-control-hud"
 ENV_PATH="$CONFIG_DIR/hub.env"
@@ -16,20 +16,23 @@ LAN_AUTO=0
 DISCOVERY_PORT=8788
 HUB_ID="central-hub"
 AGENT_ID="desktop-main"
-SOURCE=""
+BINARY=""
 TOKEN_FILE=""
-PYTHON_BIN="python3"
 PURGE=0
 PURGE_DATA=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  ai-control-hub-systemd.sh install --source REPO_ROOT --token-file PATH [--listen HOST:PORT | --lan-auto] [--discovery-port PORT] [--hub-id ID] [--agent-id ID] [--python PATH]
+  ai-control-hub-systemd.sh install --binary PATH --token-file PATH [--listen HOST:PORT | --lan-auto] [--discovery-port PORT] [--hub-id ID] [--agent-id ID]
   ai-control-hub-systemd.sh rotate-token --token-file PATH
   ai-control-hub-systemd.sh render-unit [--listen HOST:PORT | --lan-auto] [--discovery-port PORT] [--hub-id ID]
   ai-control-hub-systemd.sh start|stop|restart|status
   ai-control-hub-systemd.sh remove [--purge] [--purge-data]
+
+Go Hub deployment:
+  * CentOS does not need Python, pip, venv, or a Go toolchain
+  * install consumes the prebuilt Linux ai-control-hub binary from the validation/release bundle
 
 Security defaults:
   * listen defaults to 127.0.0.1:8787
@@ -51,14 +54,13 @@ shift
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --source) SOURCE="$2"; shift 2 ;;
+    --binary) BINARY="$2"; shift 2 ;;
     --token-file) TOKEN_FILE="$2"; shift 2 ;;
     --listen) LISTEN="$2"; LISTEN_PROVIDED=1; shift 2 ;;
     --lan-auto) LAN_AUTO=1; shift ;;
     --discovery-port) DISCOVERY_PORT="$2"; shift 2 ;;
     --hub-id) HUB_ID="$2"; shift 2 ;;
     --agent-id) AGENT_ID="$2"; shift 2 ;;
-    --python) PYTHON_BIN="$2"; shift 2 ;;
     --purge) PURGE=1; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -174,7 +176,7 @@ render_unit() {
   fi
   cat <<EOF
 [Unit]
-Description=AI Control HUD Central Hub
+Description=AI Control HUD Central Hub (Go)
 Wants=network-online.target
 After=network-online.target
 
@@ -184,13 +186,12 @@ User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=$DATA_DIR
 EnvironmentFile=$ENV_PATH
-Environment=PYTHONUNBUFFERED=1
 Environment=HUD_HUB_ID=$HUB_ID
 Environment=HUD_HUB_DISCOVERY_ENABLED=$discovery_enabled
 Environment=HUD_HUB_DISCOVERY_PORT=$DISCOVERY_PORT
 Environment=HUD_HUB_HTTP_SCHEME=http
 Environment=HUD_HUB_HTTP_PORT=$port
-ExecStart=$VENV_DIR/bin/python -m uvicorn server.hub_app:create_production_hub_app --factory --host $host --port $port --workers 1
+ExecStart=$BINARY_PATH serve --host $host --port $port
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -250,13 +251,12 @@ case "$ACTION" in
     validate_port "$DISCOVERY_PORT" "--discovery-port"
     validate_identifier "$HUB_ID" "hub id"
     validate_identifier "$AGENT_ID" "agent id"
-    [[ -n "$SOURCE" ]] || { echo "--source is required" >&2; exit 2; }
-    command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "Python interpreter is unavailable: $PYTHON_BIN" >&2; exit 1; }
-
-    source_abs="$(cd "$SOURCE" && pwd)"
-    [[ -f "$source_abs/pyproject.toml" && -f "$source_abs/server/hub_app.py" ]] || {
-      echo "--source must be the ai-control-hud repository root" >&2
-      exit 2
+    [[ -n "$BINARY" && -f "$BINARY" ]] || { echo "--binary must point to the Linux ai-control-hub executable" >&2; exit 2; }
+    binary_abs="$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")"
+    [[ -x "$binary_abs" ]] || chmod u+x "$binary_abs"
+    "$binary_abs" version >/dev/null 2>&1 || {
+      echo "Hub binary could not run on this host; verify Linux architecture/artifact" >&2
+      exit 1
     }
     token="$(read_token_file "$TOKEN_FILE")"
 
@@ -268,9 +268,7 @@ case "$ACTION" in
     sudo install -d -o root -g root -m 0755 "$CONFIG_DIR"
 
     sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-    sudo rm -rf "$VENV_DIR"
-    sudo "$PYTHON_BIN" -m venv "$VENV_DIR"
-    sudo "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check "$source_abs"
+    sudo install -o root -g root -m 0755 "$binary_abs" "$BINARY_PATH"
 
     env_tmp="$(mktemp)"
     unit_tmp="$(mktemp)"
@@ -286,7 +284,7 @@ case "$ACTION" in
     sudo systemctl daemon-reload
     sudo systemctl enable "$SERVICE_NAME"
     unset token
-    echo "[hub-systemd] installed service=$SERVICE_NAME listen=$LISTEN data=$DATA_DIR"
+    echo "[hub-systemd] installed Go Hub service=$SERVICE_NAME listen=$LISTEN data=$DATA_DIR binary=$BINARY_PATH"
     if [[ "$LAN_AUTO" -eq 1 ]]; then
       echo "[hub-systemd] LAN auto-discovery enabled udp=$DISCOVERY_PORT hub=$HUB_ID"
       print_lan_urls "$(listen_port)"
