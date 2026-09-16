@@ -13,14 +13,18 @@ import urllib.request
 from pathlib import Path
 
 
+def read_json(url: str, timeout: float = 2.0) -> dict:
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        return json.load(response)
+
+
 def wait_state(base_url: str, timeout: float = 20.0) -> dict:
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
     last_state: dict | None = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"{base_url}/api/v1/state", timeout=2) as response:
-                last_state = json.load(response)
+            last_state = read_json(f"{base_url}/api/v1/state")
             zcode = last_state.get("zcode", {})
             health = zcode.get("health", {})
             summary = zcode.get("summary") or {}
@@ -36,6 +40,36 @@ def wait_state(base_url: str, timeout: float = 20.0) -> dict:
         time.sleep(0.2)
     diagnostic = json.dumps(last_state, ensure_ascii=False) if last_state else "<no state>"
     raise RuntimeError(f"agent runtime smoke timed out; last_error={last_error}; state={diagnostic}")
+
+
+def assert_diagnostics(base_url: str, private_root: Path) -> dict:
+    diagnostics = read_json(f"{base_url}/api/v1/diagnostics")
+    if diagnostics.get("diagnosticsVersion") != 1:
+        raise RuntimeError(f"unexpected diagnostics version: {diagnostics!r}")
+    if diagnostics.get("stateSchemaVersion") != 1 or diagnostics.get("role") != "agent":
+        raise RuntimeError(f"unexpected diagnostics identity: {diagnostics!r}")
+
+    sources = diagnostics.get("sources") or {}
+    zcode = sources.get("zcode") or {}
+    if not zcode.get("enabled"):
+        raise RuntimeError(f"zcode diagnostics unexpectedly disabled: {zcode!r}")
+    if zcode.get("adapterKind") != "zcode.sqlite":
+        raise RuntimeError(f"unexpected zcode adapter: {zcode!r}")
+    if zcode.get("status") != "ok" or zcode.get("schemaSupport") != "supported":
+        raise RuntimeError(f"unexpected zcode diagnostics: {zcode!r}")
+    if zcode.get("lastSuccessAgeSeconds") is None:
+        raise RuntimeError(f"zcode last-success age missing: {zcode!r}")
+
+    command_code = sources.get("commandCode") or {}
+    if command_code.get("enabled"):
+        raise RuntimeError(f"commandcode diagnostics unexpectedly enabled: {command_code!r}")
+    if command_code.get("schemaSupport") != "not-configured":
+        raise RuntimeError(f"unexpected commandcode diagnostics: {command_code!r}")
+
+    serialized = json.dumps(diagnostics, ensure_ascii=False)
+    if str(private_root) in serialized:
+        raise RuntimeError("diagnostics leaked a private filesystem path")
+    return diagnostics
 
 
 def stop_process(process: subprocess.Popen[str]) -> None:
@@ -93,6 +127,7 @@ def main() -> None:
         env.pop("HUD_COMMANDCODE_PROVIDER_ID", None)
 
         listen = f"127.0.0.1:{args.port}"
+        base_url = f"http://{listen}"
         creationflags = 0
         if os.name == "nt":
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -106,16 +141,18 @@ def main() -> None:
             creationflags=creationflags,
         )
         try:
-            state = wait_state(f"http://{listen}")
+            state = wait_state(base_url)
             first = state["zcode"]["tasks"][0]
             if first.get("title") != "G4 synthetic Goal":
                 raise RuntimeError(f"unexpected synthetic Goal title: {first.get('title')!r}")
             if first.get("activity") != "synthetic running activity":
                 raise RuntimeError(f"unexpected synthetic activity: {first.get('activity')!r}")
+            diagnostics = assert_diagnostics(base_url, temp)
             print(
                 "[runtime-smoke] PASSED "
                 f"platform={sys.platform} version={state['server']['version']} "
-                f"zcode={state['zcode']['health']['status']}"
+                f"zcode={state['zcode']['health']['status']} "
+                f"diagnostics={diagnostics['diagnosticsVersion']}"
             )
         finally:
             stop_process(process)
