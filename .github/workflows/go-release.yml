@@ -1,0 +1,183 @@
+name: Go Agent Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without a leading v
+        required: true
+        default: 0.3.0-rc.1
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            target: windows-amd64
+            binary: ai-control-agent.exe
+            format: zip
+          - goos: linux
+            goarch: amd64
+            target: linux-amd64
+            binary: ai-control-agent
+            format: tar.gz
+          - goos: darwin
+            goarch: amd64
+            target: darwin-amd64
+            binary: ai-control-agent
+            format: tar.gz
+          - goos: darwin
+            goarch: arm64
+            target: darwin-arm64
+            binary: ai-control-agent
+            format: tar.gz
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+
+      - name: Resolve version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="$INPUT_VERSION"
+          else
+            version="${REF_NAME#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Reproducible cross-build
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist build-a build-b
+          ldflags="-s -w -buildid= -X main.version=$VERSION"
+          (
+            cd agent
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "../build-a/${{ matrix.binary }}" ./cmd/ai-control-agent
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o "../build-b/${{ matrix.binary }}" ./cmd/ai-control-agent
+          )
+          cmp "build-a/${{ matrix.binary }}" "build-b/${{ matrix.binary }}"
+          cp "build-a/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
+          archive="ai-control-agent_${VERSION}_${{ matrix.target }}.${{ matrix.format }}"
+          python3 scripts/package-agent-release.py \
+            --binary "dist/${{ matrix.binary }}" \
+            --output "dist/$archive" \
+            --archive-name "${{ matrix.binary }}" \
+            --format "${{ matrix.format }}"
+          rm "dist/${{ matrix.binary }}"
+          (cd dist && sha256sum "$archive" > "$archive.sha256")
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Verify embedded version
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verify
+          gzip -dc "dist/$ARCHIVE" | tar -xf - -C verify
+          test "$(verify/ai-control-agent version)" = "$VERSION"
+
+      - name: Upload target artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/${{ env.ARCHIVE }}
+            dist/${{ env.ARCHIVE }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="$INPUT_VERSION"
+          else
+            version="${REF_NAME#v}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Download target artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify target checksums and build manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          for checksum in *.sha256; do
+            sha256sum -c "$checksum"
+          done
+          sha256sum *.zip *.tar.gz 2>/dev/null | LC_ALL=C sort > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest release archives and manifest
+        uses: actions/attest@v4.2.2
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+
+      - name: Upload combined release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-agent-release-${{ env.VERSION }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --generate-notes \
+            --title "AI Control Agent $VERSION"
