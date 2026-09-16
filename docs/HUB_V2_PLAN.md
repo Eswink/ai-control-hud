@@ -39,7 +39,7 @@ The development machine makes outbound requests to the hub. This avoids inbound 
 
 A snapshot answers "what is true now?" and is replaceable.
 
-An event answers "what happened?" and is durable and ordered. Task completion/failure notifications must eventually use the event stream rather than infer transitions only from Android polling.
+An event answers "what happened?" and is durable and ordered. Task completion/failure notifications use the event stream rather than infer transitions only from Android polling.
 
 ### 5. CentOS is the Android authority
 
@@ -93,13 +93,16 @@ Authorization: Bearer <agent token>
 ```text
 GET /api/v1/state
 GET /api/v1/health
+GET /api/v1/events?after=<seq>&limit=<1..100>
 ```
 
 The hub serves the latest accepted canonical snapshot. If the agent heartbeat is older than the configured freshness threshold, previously trusted source data is retained but projected as `stale`; the aggregate state becomes `degraded`.
 
+The event feed is independently schema-versioned. It exposes `nextAfter` for page consumption and `latestSeq` as the current high-water mark so a newly installed Android client can establish a silent baseline without replaying historical completions.
+
 ## Persistence
 
-Phase 1 uses SQLite on the Linux server.
+The Linux server uses SQLite.
 
 Tables:
 
@@ -114,14 +117,14 @@ snapshots
   received_at
   state_json
 
-phase 2:
 events
   seq INTEGER PK AUTOINCREMENT
   event_id UNIQUE
   agent_id
   event_type
   occurred_at
-  payload_json
+  received_at
+  event_json
 ```
 
 No Redis, PostgreSQL, Kafka, MQTT, or Kubernetes is required for the first deployment.
@@ -131,12 +134,14 @@ No Redis, PostgreSQL, Kafka, MQTT, or Kubernetes is required for the first deplo
 Agent events use at-least-once delivery with idempotent server insertion:
 
 1. transition detector creates an event with a stable `eventId`;
-2. event is written to a local durable outbox;
+2. event is written to a local durable SQLite outbox;
 3. uploader retries until the hub acknowledges it;
 4. hub enforces `UNIQUE(event_id)`;
 5. Android consumes events using monotonically increasing server `seq` cursors.
 
-This avoids both silent event loss and exactly-once complexity.
+Task observation runs independently from event network delivery, so network backoff cannot stop local transition capture.
+
+The first trustworthy snapshot seen by a new outbox establishes only a baseline. Historical completed/failed tasks are not replayed as new events.
 
 ## Android notification policy — phase 3
 
@@ -183,7 +188,7 @@ Exit criterion met at code/CI level: the production Go agent can refresh the hub
 
 ### H3 — Android cutover
 
-- [ ] deploy the H1 hub on the 24/7 CentOS host.
+- [ ] deploy the H1/H4 hub on the 24/7 CentOS host.
 - [ ] configure the Windows agent to upload to that hub.
 - [ ] point the existing HUD at the hub.
 - [ ] show useful last-seen/offline state.
@@ -191,19 +196,28 @@ Exit criterion met at code/CI level: the production Go agent can refresh the hub
 
 ### H4 — Durable event stream
 
-- [ ] define event schema.
-- [ ] transition detector.
-- [ ] local agent outbox.
-- [ ] idempotent hub event ingest.
-- [ ] cursor API.
+- [x] define independently versioned event schema.
+- [x] transition detector with safe first-run baseline.
+- [x] durable local SQLite agent outbox.
+- [x] independent observation and delivery loops.
+- [x] idempotent hub event ingest by `eventId`.
+- [x] monotonically ordered `seq` cursor API.
+- [x] expose `latestSeq` high-water mark for first Android baseline.
+- [x] persistence/retry/idempotency tests.
+
+Exit criterion met at code/CI level: task terminal transitions survive agent restarts/network loss, may be delivered at least once without duplicate hub entries, survive hub restart, and can be consumed through a schema-v1 cursor feed. Python CI passes on Linux/Windows; Go vet/test/build and all existing service/SecretStore smoke checks pass across Windows/Linux/macOS.
 
 ### H5 — Android voice notifications
 
-- [ ] event cursor persistence.
+- [ ] event client/parser with schema compatibility handling.
+- [ ] first-run event baseline from `latestSeq`.
+- [ ] persistent event cursor.
 - [ ] TextToSpeech integration.
-- [ ] per-event voice preferences.
+- [ ] user voice enable/disable preference.
 - [ ] default 23:00–08:00 quiet hours.
-- [ ] notification-age suppression / offline summary.
+- [ ] notification-age suppression for offline catch-up.
+- [ ] TTS package-visibility manifest declaration.
+- [ ] Android policy tests and CI build.
 
 ### H6 — Deployment hardening
 
