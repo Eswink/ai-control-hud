@@ -51,14 +51,13 @@ secret_from_config() {
   if ! sudo test -f "$CONFIG_PATH"; then
     return 0
   fi
-  sudo python3 - "$CONFIG_PATH" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    value = json.load(handle).get("commandCodeSecret", "")
-if value:
-    print(value)
-PY
+  if sudo test -x "$INSTALL_DIR/ai-control-agent"; then
+    sudo "$INSTALL_DIR/ai-control-agent" config get \
+      --config "$CONFIG_PATH" \
+      --field command-code-secret
+  else
+    printf '%s\n' "$(dirname "$CONFIG_PATH")/commandcode.dpapi"
+  fi
 }
 
 case "$ACTION" in
