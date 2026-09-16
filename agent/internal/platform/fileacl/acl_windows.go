@@ -28,7 +28,9 @@ func Protect(path string) error {
 	if err != nil {
 		return errors.New("read protected ACL failed")
 	}
-	information := windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION
+	information := windows.SECURITY_INFORMATION(
+		windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION,
+	)
 	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, information, nil, nil, dacl, nil); err != nil {
 		return errors.New("apply protected ACL failed")
 	}
