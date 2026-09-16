@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -117,9 +118,14 @@ func serve(
 	snapshotStore *store.SnapshotStore,
 	collectorLoop *agentruntime.Runtime,
 ) error {
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		return fmt.Errorf("listen HTTP server on %s: %w", listen, err)
+	}
+	defer listener.Close()
+
 	apiServer := apihttp.New(snapshotStore, version, started)
 	httpServer := &http.Server{
-		Addr:              listen,
 		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -141,7 +147,7 @@ func serve(
 			enabledLabel(zEnabled),
 			enabledLabel(ccEnabled),
 		)
-		errCh <- httpServer.ListenAndServe()
+		errCh <- httpServer.Serve(listener)
 	}()
 
 	select {
