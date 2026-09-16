@@ -1,102 +1,177 @@
 # AI Control HUD
 
-A lightweight always-on control panel for monitoring AI coding-agent activity from an old Android device.
+A lightweight always-on HUD for monitoring AI coding-agent activity from an old Android device, with a 24/7 Central Hub between the development machine and the phone.
 
-## Current status
-
-The existing Windows + Android deployment is live and the repository is now migrating to **Central Hub V2** so the Android HUD remains useful when the development PC is powered off.
-
-Working foundations:
-
-- Go production agent on the development machine;
-- realtime ZCode Goal/session monitoring from local read-only SQLite state;
-- freshness-bounded task-index fallback;
-- CommandCode plan, credit and usage-window collection;
-- canonical schema-v1 `/api/v1/state` and `/api/v1/health`;
-- native Android Java/XML HUD for the target old device;
-- Windows service and protected local CommandCode credential storage;
-- GitHub Actions builds/tests across the supported agent platforms and Android CI.
-
-Central Hub V2 currently adds:
-
-- a FastAPI + SQLite relay for the 24/7 Linux server;
-- authenticated agent state and heartbeat ingestion;
-- server-side last-seen freshness projection;
-- preservation of the existing Android schema-v1 API;
-- an optional outbound Go uploader with bounded timeouts/backoff.
-
-Durable task events, Android TTS/quiet hours, and production Linux deployment hardening are the next iterations.
-
-## Target architecture
+## Current architecture
 
 ```text
-Development PC                       24/7 Linux server                 Old Android phone
-┌──────────────────────┐             ┌───────────────────────┐        ┌────────────────────┐
-│ ZCode / CommandCode  │             │ AI Control Hub        │        │ Native HUD         │
-│         │            │  outbound   │ FastAPI + SQLite      │ HTTP   │ state + events     │
-│         ▼            ├────────────►│ latest snapshot       ├───────►│ local TTS policy   │
-│ Go ai-control-agent  │             │ heartbeat / events    │        │ quiet hours        │
-│ + local diagnostics  │             │ schema-v1 API         │        │                    │
-└──────────────────────┘             └───────────────────────┘        └────────────────────┘
+Windows development machine              24/7 CentOS server                  Android HUD
+┌──────────────────────────┐             ┌────────────────────────────┐       ┌──────────────────────┐
+│ ZCode / CommandCode      │             │ ai-control-hub (Go)        │       │ Native Java HUD      │
+│          │               │   outbound  │                            │ HTTP  │                      │
+│          ▼               ├────────────►│ latest canonical snapshot  ├──────►│ state dashboard      │
+│ ai-control-agent (Go)    │             │ agent heartbeat            │       │ durable event cursor │
+│          │               │             │ durable event log          │       │ local TextToSpeech   │
+│          ├ local API     │             │ SQLite                     │       │ quiet hours          │
+│          └ durable outbox│    UDP      │ LAN discovery :8788        │       │                      │
+└──────────────────────────┘             └────────────────────────────┘       └──────────────────────┘
 ```
 
-Vendor credentials stay on the development machine. The Linux hub and Android device receive only normalized operational state/events.
+The production path is Go end-to-end on Windows and CentOS. The Android application remains native Java/XML.
 
-See [`docs/HUB_V2_PLAN.md`](docs/HUB_V2_PLAN.md) for the active migration roadmap and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for boundaries/failure semantics.
+The earlier Python/FastAPI Hub implementation remains in the repository temporarily as a protocol/parity reference while the Go Hub completes real-device cutover. New CentOS deployments should use the prebuilt `ai-control-hub` Go binary; they do not require Python, pip, a virtual environment, or a Go compiler.
 
-## Development-machine agent
+## Working capabilities
 
-The production collector lives in [`agent/`](agent/). Local diagnostic endpoints remain available even when remote hub upload is enabled:
+### Windows Agent
+
+- realtime ZCode Goal/session monitoring from local read-only SQLite state;
+- freshness-bounded task-index fallback;
+- CommandCode plan, credit, and usage-window collection;
+- canonical schema-v1 state model;
+- local `/api/v1/state` and `/api/v1/health` diagnostics;
+- Windows service support;
+- protected CommandCode credentials;
+- protected Hub credentials using machine-scope DPAPI + ACL;
+- outbound Hub snapshot/heartbeat upload with bounded timeout/backoff;
+- durable SQLite task-event outbox with at-least-once delivery;
+- LAN Hub auto-discovery and rediscovery.
+
+### Central Hub
+
+- standalone statically linked Go runtime;
+- authenticated state, heartbeat, and event ingestion;
+- SQLite persistence using the existing Central-Hub schema;
+- schema-v1 Android-compatible `/api/v1/state` and `/api/v1/health`;
+- independently versioned durable `/api/v1/events` cursor feed;
+- stale/degraded projection when the Windows heartbeat disappears;
+- globally idempotent `eventId` insertion and monotonic server `seq`;
+- optional trusted-LAN UDP discovery on port 8788;
+- hardened systemd deployment as an unprivileged user;
+- live SQLite backup via the Go binary with integrity validation;
+- token rotation without putting bearer tokens in command-line arguments.
+
+### Android HUD
+
+- native Java + XML Views, `minSdk` API 23;
+- schema-v1 state dashboard;
+- persistent event cursor;
+- silent first-install baseline and Hub-reset rebase;
+- local Android TextToSpeech for completed/failed tasks;
+- independently configurable completed/failed speech;
+- default quiet hours 23:00–08:00;
+- old-event suppression and one catch-up summary;
+- LAN Hub auto-discovery;
+- dashboard display of the currently resolved physical Hub address;
+- stable logical Hub identity across DHCP/IP changes.
+
+## Security boundaries
+
+- CommandCode/ZCode vendor credentials stay on the Windows development machine.
+- The CentOS Hub and Android device receive only normalized operational state/events.
+- Hub ingestion uses a separate project-internal bearer token; this token is **not** the CommandCode token.
+- Android never receives the Hub ingestion token.
+- Windows initiates outbound Hub connections; the Hub never polls Windows.
+- UDP discovery is location discovery only, not authentication, and contains no token or private HUD state.
+- Public Internet exposure is not part of the current deployment design.
+
+## Development-machine Agent
+
+The production collector lives in [`agent/`](agent/).
+
+Local diagnostic endpoints:
 
 ```text
 GET http://127.0.0.1:8787/api/v1/health
 GET http://127.0.0.1:8787/api/v1/state
 ```
 
-Typical foreground launch on Windows:
+Typical foreground Windows launch:
 
 ```powershell
 .\scripts\run-go-windows.ps1
 ```
 
-The installed Windows service path and DPAPI-backed CommandCode credential flow are documented in [`docs/G6_WINDOWS_SERVICE.md`](docs/G6_WINDOWS_SERVICE.md).
+Production Windows service and DPAPI credential details are documented in [`docs/G6_WINDOWS_SERVICE.md`](docs/G6_WINDOWS_SERVICE.md).
 
-### Optional Central Hub upload (H2 development configuration)
+### Configure Central Hub upload
 
-Remote upload is disabled by default. The current development slice enables it with:
+The preferred trusted-LAN mode stores a stable auto-discovery identity rather than a DHCP IP:
 
-```text
-AI_CONTROL_HUB_URL=https://your-private-hub.example
-AI_CONTROL_HUB_AGENT_ID=desktop-main
-AI_CONTROL_HUB_TOKEN=<agent bearer token>
+```powershell
+.\ai-control-agent.exe hub configure `
+  --hub-auto `
+  --hub-agent-id desktop-main `
+  --hub-token-file C:\Temp\ai-control-hub.token
+
+.\ai-control-agent.exe hub status
 ```
 
-The agent keeps local collection/API functionality if the hub or network is unavailable. The environment-variable token is temporary migration configuration; production service deployment will move it into protected machine storage.
+A successful status shows `url=auto://lan` plus the currently resolved physical URL. Manual `--hub-url http://<fixed-private-ip>:8787` remains available when broadcast discovery is blocked.
 
-## Linux Central Hub
+The Agent continues local collection/API behavior when the Hub or network is unavailable; terminal events remain in the durable outbox until delivery succeeds.
 
-The hub entry point is `server.hub_app:create_production_hub_app`.
+## Linux Central Hub — Go runtime
 
-Required/configurable environment:
+The production binary is:
 
 ```text
-HUD_HUB_AGENT_TOKEN=<agent bearer token>
+ai-control-hub
+```
+
+Commands:
+
+```text
+ai-control-hub version
+ai-control-hub serve --host HOST --port PORT
+ai-control-hub backup --database PATH --output PATH
+```
+
+Production configuration keeps the existing environment contract:
+
+```text
+HUD_HUB_AGENT_TOKEN=<project-internal agent bearer token>
 HUD_HUB_AGENT_ID=desktop-main
 HUD_HUB_DB=/var/lib/ai-control-hud/hub.sqlite3
 HUD_HUB_STALE_AFTER_SECONDS=45
 ```
 
-A development launch from the repository root can use:
+LAN-auto deployment adds Hub ID/discovery/HTTP metadata through the hardened systemd unit.
+
+### Install on CentOS without Python
+
+Use the CI-produced H3 validation/release bundle. After generating a new random Hub token file:
 
 ```bash
-python -m uvicorn 'server.hub_app:create_production_hub_app' --factory --host 0.0.0.0 --port 8787
+bash scripts/ai-control-hub-systemd.sh install \
+  --binary "$PWD/ai-control-hub" \
+  --token-file "$HOME/ai-control-hub.token" \
+  --lan-auto \
+  --hub-id dorm-hub \
+  --agent-id desktop-main
+
+bash scripts/ai-control-hub-systemd.sh start
 ```
 
-Agent ingest:
+The preferred LAN mode uses:
+
+```text
+TCP 8787   Hub HTTP API
+UDP 8788   Hub discovery
+```
+
+The current DHCP address, such as `192.168.101.103`, is runtime/display information only and is not the stable client identity.
+
+See [`docs/HUB_DEPLOYMENT.md`](docs/HUB_DEPLOYMENT.md) and [`docs/H3_FIELD_VALIDATION.md`](docs/H3_FIELD_VALIDATION.md).
+
+## Hub API
+
+Agent ingestion:
 
 ```text
 POST /api/v1/agent/state
 POST /api/v1/agent/heartbeat
+POST /api/v1/agent/events
 ```
 
 Android-compatible reads:
@@ -104,23 +179,28 @@ Android-compatible reads:
 ```text
 GET /api/v1/state
 GET /api/v1/health
+GET /api/v1/events?after=<seq>&limit=<1..100>
 ```
 
-Use a trusted LAN/private overlay (for example Tailscale/WireGuard) and/or TLS. Direct public exposure is not part of the current design.
+Snapshots answer what is true now. Durable events answer what happened. They intentionally remain separate protocols.
 
 ## Android
 
-Install the APK produced by the `Android CI` workflow. During H3 the configured backend URL moves from the Windows machine to the 24/7 Linux hub; the schema remains v1 so the existing parser remains compatible.
+Install the APK produced by Android CI.
 
-The app intentionally remains native Android Java + XML Views with no WebView/Compose/Flutter/React Native. `minSdk` is API 23.
+Fresh installations use LAN auto-discovery. Existing installations can open `SERVER`, enter:
 
-Planned notification behavior:
+```text
+auto.lan
+```
 
-- durable task completion/failure events;
-- local Android TextToSpeech;
-- user-selectable speech;
-- default quiet hours 23:00–08:00;
-- suppression/summary of old events received after long offline periods.
+and reconnect. In auto mode the dashboard displays the current physical address, for example:
+
+```text
+AUTO · http://192.168.101.103:8787
+```
+
+The stable internal identity remains `http://auto.lan`, so a DHCP IP change does not silently reset the durable event cursor.
 
 ## Data-source behavior
 
@@ -132,45 +212,46 @@ Realtime Goal mode is read from `~/.zcode/cli/db/db.sqlite` using verified sessi
 
 ### CommandCode
 
-The development-machine agent calls the verified CommandCode billing source and normalizes plan/credit/5-hour/weekly state. Authentication, network, and schema failures remain explicit source errors/stale state rather than fabricated zero values.
+The Windows Agent calls the verified CommandCode billing source and normalizes plan/credit/5-hour/weekly state. Authentication, network, and schema failures remain explicit source errors/stale state rather than fabricated zero values.
 
 ## Technology constraints
 
-### Development agent
+### Windows Agent
 
-- Go
-- pure-Go SQLite access
-- local canonical SnapshotStore
-- local diagnostics + optional outbound hub uploader
-- platform-specific service/secret integrations isolated under platform packages
+- Go;
+- pure-Go SQLite;
+- local canonical SnapshotStore;
+- local diagnostics + outbound Hub uploader + durable event outbox;
+- platform-specific service/secret integrations isolated under platform packages.
 
-### Linux hub
+### CentOS Hub
 
-- Python 3
-- FastAPI
-- SQLite initially
-- no vendor credentials
-- no Redis/PostgreSQL/message broker until a measured requirement exists
+- standalone Go binary;
+- pure-Go SQLite;
+- no runtime Python dependency;
+- no vendor credentials;
+- no Redis/PostgreSQL/message broker until a measured requirement exists.
 
 ### Android
 
-- native Android
-- Java + XML Views
-- no WebView
-- no Compose
-- no Flutter/React Native
-- `minSdk` API 23
+- native Android;
+- Java + XML Views;
+- no WebView/Compose/Flutter/React Native;
+- `minSdk` API 23.
 
-### Build/test
+### CI
 
-- GitHub Actions
-- Go vet/test/build across Windows/Linux/macOS
-- Python tests on Windows/Linux
-- Android CI produces installable debug APK artifacts
+- Go Agent vet/test/build on Windows/Linux/macOS;
+- dedicated Go Hub reproducible static Linux build + runtime/systemd/package smoke;
+- Android lint/unit/APK CI;
+- temporary Python Linux/Windows parity/reference tests until Go Hub field cutover is accepted.
 
 ## Project docs
 
-- [`docs/HUB_V2_PLAN.md`](docs/HUB_V2_PLAN.md) — active Central Hub migration plan
+- [`docs/HUB_V2_PLAN.md`](docs/HUB_V2_PLAN.md) — active Central Hub roadmap
+- [`docs/GO_HUB_MIGRATION.md`](docs/GO_HUB_MIGRATION.md) — Go runtime migration/cutover contract
+- [`docs/HUB_DEPLOYMENT.md`](docs/HUB_DEPLOYMENT.md) — Go Hub deployment/runbook
+- [`docs/H3_FIELD_VALIDATION.md`](docs/H3_FIELD_VALIDATION.md) — real-device acceptance checklist
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/DECISIONS.md`](docs/DECISIONS.md)
 - [`docs/API.md`](docs/API.md)
