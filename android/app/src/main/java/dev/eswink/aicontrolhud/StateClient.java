@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 final class StateClient {
     static final String AUTO_BASE_URL = "http://auto.lan";
 
+    private static final String STATE_PATH = "/api/v1/state";
     private static final int CONNECT_TIMEOUT_MS = 2500;
     private static final int READ_TIMEOUT_MS = 2500;
     private static final int DISCOVERY_TIMEOUT_MS = 1600;
@@ -22,7 +23,7 @@ final class StateClient {
     private static volatile String lastResolvedAutoBaseUrl;
 
     StateSnapshot fetchState(String baseUrl) throws Exception {
-        return StateSnapshot.parse(get(baseUrl, "/api/v1/state"));
+        return StateSnapshot.parse(get(baseUrl, STATE_PATH));
     }
 
     EventPage fetchEvents(String baseUrl, long after, int limit) throws Exception {
@@ -49,7 +50,9 @@ final class StateClient {
         try {
             return getAt(resolved, path);
         } catch (Exception first) {
-            if (!AUTO_BASE_URL.equals(configuredBaseUrl)) throw first;
+            if (!AUTO_BASE_URL.equals(configuredBaseUrl) || !shouldRediscoverAfter(first)) {
+                throw first;
+            }
             invalidateAutoResolution(resolved);
             String rediscovered = resolveBaseUrl(configuredBaseUrl);
             if (rediscovered.equals(resolved)) throw first;
@@ -62,12 +65,23 @@ final class StateClient {
         try {
             int code = connection.getResponseCode();
             if (code != HttpURLConnection.HTTP_OK) {
-                throw new IOException(path + " HTTP " + code);
+                throw httpFailure(path, code);
             }
             return readAll(connection.getInputStream());
         } finally {
             connection.disconnect();
         }
+    }
+
+    static boolean shouldRediscoverAfter(Exception error) {
+        return !(error instanceof HttpStatusException);
+    }
+
+    static HttpStatusException httpFailure(String path, int statusCode) {
+        if (STATE_PATH.equals(path) && statusCode == HttpURLConnection.HTTP_UNAVAILABLE) {
+            return new SnapshotUnavailableException(path, statusCode);
+        }
+        return new HttpStatusException(path, statusCode);
     }
 
     private synchronized String resolveBaseUrl(String configuredBaseUrl) throws IOException {
@@ -118,5 +132,26 @@ final class StateClient {
             }
         }
         return builder.toString();
+    }
+
+    static class HttpStatusException extends IOException {
+        final String path;
+        final int statusCode;
+
+        HttpStatusException(String path, int statusCode) {
+            this(path, statusCode, path + " HTTP " + statusCode);
+        }
+
+        HttpStatusException(String path, int statusCode, String message) {
+            super(message);
+            this.path = path;
+            this.statusCode = statusCode;
+        }
+    }
+
+    static final class SnapshotUnavailableException extends HttpStatusException {
+        SnapshotUnavailableException(String path, int statusCode) {
+            super(path, statusCode, "Hub online; waiting for primary Agent snapshot");
+        }
     }
 }
