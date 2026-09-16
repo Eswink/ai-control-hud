@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="ai-control-hub.service"
 SERVICE_USER="ai-control-hub"
 INSTALL_DIR="/usr/local/lib/ai-control-hub"
 BINARY_PATH="$INSTALL_DIR/ai-control-hub"
+INSTALLED_DOCTOR_PATH="$INSTALL_DIR/ai-control-hub-lan-doctor.sh"
+DOCTOR_SOURCE="$SCRIPT_DIR/ai-control-hub-lan-doctor.sh"
+DOCTOR_PATH="${AI_CONTROL_HUB_DOCTOR_PATH:-$INSTALLED_DOCTOR_PATH}"
 DATA_DIR="/var/lib/ai-control-hud"
 CONFIG_DIR="/etc/ai-control-hud"
 ENV_PATH="$CONFIG_DIR/hub.env"
-UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
+UNIT_PATH="${AI_CONTROL_HUB_UNIT_PATH:-/etc/systemd/system/$SERVICE_NAME}"
 
 LISTEN="127.0.0.1:8787"
 LISTEN_PROVIDED=0
@@ -28,17 +32,20 @@ Usage:
   ai-control-hub-systemd.sh rotate-token --token-file PATH
   ai-control-hub-systemd.sh render-unit [--listen HOST:PORT | --lan-auto] [--discovery-port PORT] [--hub-id ID]
   ai-control-hub-systemd.sh start|stop|restart|status
+  ai-control-hub-systemd.sh lan-doctor
   ai-control-hub-systemd.sh remove [--purge] [--purge-data]
 
 Go Hub deployment:
   * CentOS does not need Python, pip, venv, or a Go toolchain
   * install consumes the prebuilt Linux ai-control-hub binary from the validation/release bundle
+  * install also deploys the read-only LAN readiness doctor next to the Hub binary
   * an old /usr/local/lib/ai-control-hub/venv from the Python Hub is removed during install
 
 Security defaults:
   * listen defaults to 127.0.0.1:8787
   * --lan-auto explicitly binds 0.0.0.0:8787 and enables UDP LAN discovery on port 8788
   * LAN discovery advertises only service metadata; it never sends the bearer token
+  * lan-doctor is read-only and never modifies firewalld/service configuration
   * the token file is imported into /etc/ai-control-hud/hub.env (0600, root-only)
   * SQLite state lives in /var/lib/ai-control-hud and is preserved on normal removal
   * token rotation never accepts a bearer token on the command line
@@ -242,6 +249,11 @@ read_env_value() {
   sudo sed -n "s/^${key}=//p" "$ENV_PATH" | tail -n 1
 }
 
+unit_environment_value() {
+  local key="$1"
+  sed -n "s/^Environment=${key}=//p" "$UNIT_PATH" | tail -n 1
+}
+
 case "$ACTION" in
   render-unit)
     render_unit
@@ -253,6 +265,7 @@ case "$ACTION" in
     validate_identifier "$HUB_ID" "hub id"
     validate_identifier "$AGENT_ID" "agent id"
     [[ -n "$BINARY" && -f "$BINARY" ]] || { echo "--binary must point to the Linux ai-control-hub executable" >&2; exit 2; }
+    [[ -f "$DOCTOR_SOURCE" ]] || { echo "LAN doctor is missing next to installer: $DOCTOR_SOURCE" >&2; exit 2; }
     binary_abs="$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")"
     [[ -x "$binary_abs" ]] || chmod u+x "$binary_abs"
     "$binary_abs" version >/dev/null 2>&1 || {
@@ -271,6 +284,7 @@ case "$ACTION" in
     sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
     sudo rm -rf "$INSTALL_DIR/venv"
     sudo install -o root -g root -m 0755 "$binary_abs" "$BINARY_PATH"
+    sudo install -o root -g root -m 0755 "$DOCTOR_SOURCE" "$INSTALLED_DOCTOR_PATH"
 
     env_tmp="$(mktemp)"
     unit_tmp="$(mktemp)"
@@ -287,9 +301,11 @@ case "$ACTION" in
     sudo systemctl enable "$SERVICE_NAME"
     unset token
     echo "[hub-systemd] installed Go Hub service=$SERVICE_NAME listen=$LISTEN data=$DATA_DIR binary=$BINARY_PATH"
+    echo "[hub-systemd] installed read-only LAN doctor=$INSTALLED_DOCTOR_PATH"
     if [[ "$LAN_AUTO" -eq 1 ]]; then
       echo "[hub-systemd] LAN auto-discovery enabled udp=$DISCOVERY_PORT hub=$HUB_ID"
       print_lan_urls "$(listen_port)"
+      echo "[hub-systemd] after starting the service, run '$0 lan-doctor' to verify listeners and firewalld"
     fi
     echo "[hub-systemd] service is enabled but not started; run '$0 start' after network/firewall validation"
     echo "[hub-systemd] plaintext token file was not modified; delete it after end-to-end validation"
@@ -340,6 +356,23 @@ case "$ACTION" in
   status)
     require_systemd
     sudo systemctl --no-pager --full status "$SERVICE_NAME"
+    ;;
+  lan-doctor)
+    [[ -f "$UNIT_PATH" ]] || { echo "Hub systemd unit is missing: $UNIT_PATH" >&2; exit 1; }
+    [[ -f "$DOCTOR_PATH" ]] || { echo "Installed LAN doctor is missing: $DOCTOR_PATH" >&2; exit 1; }
+    discovery_enabled="$(unit_environment_value HUD_HUB_DISCOVERY_ENABLED)"
+    http_port="$(unit_environment_value HUD_HUB_HTTP_PORT)"
+    discovery_port="$(unit_environment_value HUD_HUB_DISCOVERY_PORT)"
+    if [[ "$discovery_enabled" != "1" ]]; then
+      echo "Hub LAN auto-discovery is not enabled in $UNIT_PATH; lan-doctor applies to --lan-auto deployments" >&2
+      exit 2
+    fi
+    validate_port "$http_port" "configured Hub HTTP port"
+    validate_port "$discovery_port" "configured Hub discovery port"
+    bash "$DOCTOR_PATH" \
+      --http-port "$http_port" \
+      --discovery-port "$discovery_port" \
+      --service "$SERVICE_NAME"
     ;;
   remove)
     require_systemd
