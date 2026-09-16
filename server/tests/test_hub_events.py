@@ -111,14 +111,39 @@ def test_event_ingest_is_idempotent_and_cursor_ordered(tmp_path: Path) -> None:
         assert body["events"][0]["task"]["status"] == "completed"
         assert body["events"][1]["task"]["status"] == "failed"
         assert body["nextAfter"] == 2
+        assert body["latestSeq"] == 2
+
+        first_only = client.get("/api/v1/events?after=0&limit=1").json()
+        assert [event["eventId"] for event in first_only["events"]] == ["event-0001"]
+        assert first_only["nextAfter"] == 1
+        assert first_only["latestSeq"] == 2
 
         tail = client.get("/api/v1/events?after=1&limit=100").json()
         assert tail["schemaVersion"] == 1
         assert [event["eventId"] for event in tail["events"]] == ["event-0002"]
         assert tail["nextAfter"] == 2
+        assert tail["latestSeq"] == 2
 
         empty = client.get("/api/v1/events?after=2&limit=100").json()
-        assert empty == {"schemaVersion": 1, "events": [], "nextAfter": 2}
+        assert empty == {
+            "schemaVersion": 1,
+            "events": [],
+            "nextAfter": 2,
+            "latestSeq": 2,
+        }
+
+
+def test_empty_event_feed_has_zero_high_water_mark(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
+    app = create_hub_app(make_config(tmp_path), now_provider=lambda: now)
+
+    with TestClient(app) as client:
+        assert client.get("/api/v1/events").json() == {
+            "schemaVersion": 1,
+            "events": [],
+            "nextAfter": 0,
+            "latestSeq": 0,
+        }
 
 
 def test_event_type_and_terminal_status_must_agree(tmp_path: Path) -> None:
@@ -164,6 +189,7 @@ def test_android_event_feed_only_exposes_primary_agent(tmp_path: Path) -> None:
         assert body["schemaVersion"] == 1
         assert [event["eventId"] for event in body["events"]] == ["primary-01"]
         assert body["events"][0]["agentId"] == "desktop-main"
+        assert body["latestSeq"] == body["events"][0]["seq"]
 
 
 def test_events_survive_hub_restart(tmp_path: Path) -> None:
@@ -193,3 +219,4 @@ def test_events_survive_hub_restart(tmp_path: Path) -> None:
         assert len(body["events"]) == 1
         assert body["events"][0]["eventId"] == "event-0001"
         assert body["nextAfter"] == 1
+        assert body["latestSeq"] == 1
