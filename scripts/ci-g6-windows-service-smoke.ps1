@@ -37,7 +37,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 [System.IO.File]::WriteAllText($apiKeyFile, "test-only`n", [System.Text.UTF8Encoding]::new($false))
-[System.IO.File]::WriteAllText($badUpgradeAgent, "this is intentionally not a Windows executable", [System.Text.UTF8Encoding]::new($false))
+& go build -o $badUpgradeAgent (Join-Path $repoRoot "scripts\fixtures\broken-service-agent.go")
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to build the preflight-valid broken service candidate"
+}
 
 # Place a valid legacy provider file at the historical implicit location. The
 # service install must ignore it because --provider-config is not supplied.
@@ -210,11 +213,11 @@ try {
         throw "ZCode did not recover after running service upgrade"
     }
 
-    Write-Host "[g6-ci] forcing failed upgrade and verifying automatic rollback"
+    Write-Host "[g6-ci] forcing post-preflight SCM failure and verifying automatic rollback"
     $protectedBeforeRollback = Get-ProtectedStateHashes
     & $agent service upgrade --source $badUpgradeAgent
     if ($LASTEXITCODE -eq 0) {
-        throw "broken upgrade candidate unexpectedly succeeded"
+        throw "broken service candidate unexpectedly succeeded"
     }
     $service = Get-Service -Name "AIControlHUD" -ErrorAction Stop
     if ($service.Status -ne "Running") {
