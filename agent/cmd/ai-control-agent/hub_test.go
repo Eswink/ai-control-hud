@@ -104,3 +104,32 @@ func TestHubConfigureAndTokenRotationPreserveEndpoint(t *testing.T) {
 		t.Fatalf("hub-only configure unexpectedly created machine config: %v", err)
 	}
 }
+
+func TestHubConfigureAutoDiscovery(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	tokenFile := filepath.Join(t.TempDir(), "token.txt")
+	if err := os.WriteFile(tokenFile, []byte("auto-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runHubCommand([]string{
+		"configure",
+		"--config", configPath,
+		"--hub-auto",
+		"--hub-agent-id", "desktop-main",
+		"--hub-token-file", tokenFile,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := secretstore.ReadHub(machineconfig.DefaultHubSecretPath(configPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.BaseURL != secretstore.HubAutoBaseURL {
+		t.Fatalf("unexpected auto base URL %q", record.BaseURL)
+	}
+	if record.Token != "auto-token" {
+		t.Fatalf("unexpected token %q", record.Token)
+	}
+}
