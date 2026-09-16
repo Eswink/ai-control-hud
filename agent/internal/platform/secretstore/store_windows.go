@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"unsafe"
 
+	"github.com/Eswink/ai-control-hud/agent/internal/platform/fileacl"
 	"golang.org/x/sys/windows"
 )
 
@@ -34,21 +35,27 @@ func Write(path string, record Record) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create secret store directory: %w", err)
 	}
+	if err := fileacl.Protect(directory); err != nil {
+		return fmt.Errorf("protect secret store directory: %w", err)
+	}
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, cipher, 0o600); err != nil {
 		return fmt.Errorf("write secret store: %w", err)
 	}
-	if err := protectACL(temporary); err != nil {
+	if err := fileacl.Protect(temporary); err != nil {
 		_ = os.Remove(temporary)
-		return err
+		return fmt.Errorf("protect temporary secret store: %w", err)
 	}
-	_ = os.Remove(path)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("replace secret store: %w", err)
+	}
 	if err := os.Rename(temporary, path); err != nil {
 		_ = os.Remove(temporary)
 		return fmt.Errorf("commit secret store: %w", err)
 	}
-	if err := protectACL(path); err != nil {
-		return err
+	if err := fileacl.Protect(path); err != nil {
+		return fmt.Errorf("protect secret store: %w", err)
 	}
 	return nil
 }
@@ -118,27 +125,6 @@ func copyAndFreeBlob(blob *windows.DataBlob) []byte {
 	result := make([]byte, len(view))
 	copy(result, view)
 	return result
-}
-
-func protectACL(path string) error {
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil || user == nil || user.User.Sid == nil {
-		return errors.New("resolve installer SID failed")
-	}
-	sddl := fmt.Sprintf("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;%s)", user.User.Sid.String())
-	descriptor, err := windows.SecurityDescriptorFromString(sddl)
-	if err != nil {
-		return errors.New("build secret store ACL failed")
-	}
-	dacl, _, err := descriptor.DACL()
-	if err != nil {
-		return errors.New("read secret store ACL failed")
-	}
-	information := windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION
-	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, information, nil, nil, dacl, nil); err != nil {
-		return errors.New("apply secret store ACL failed")
-	}
-	return nil
 }
 
 func zero(data []byte) {
