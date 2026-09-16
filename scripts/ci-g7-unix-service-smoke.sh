@@ -7,11 +7,11 @@ STATE_TOOL="$REPO_ROOT/scripts/g4_state_db.py"
 PORT=18789
 BASE_URL="http://127.0.0.1:$PORT"
 ROOT="${RUNNER_TEMP:-/tmp}/ai-control-hud-g7-service-smoke"
-SOURCE_ROOT="$ROOT/source"
+SMOKE_HOME="$ROOT/home"
 PROVIDER_ROOT="$ROOT/provider"
 STATE_ROOT="$ROOT/state"
-RUNTIME_DB="$SOURCE_ROOT/runtime.sqlite"
-TASK_INDEX_DB="$SOURCE_ROOT/tasks-index.sqlite"
+RUNTIME_DB="$SMOKE_HOME/.zcode/cli/db/db.sqlite"
+TASK_INDEX_DB="$SMOKE_HOME/.zcode/v2/tasks-index.sqlite"
 PROVIDER_CONFIG="$PROVIDER_ROOT/provider.json"
 CONFIG_PATH="$STATE_ROOT/agent.json"
 
@@ -22,7 +22,7 @@ case "$(uname -s)" in
 esac
 
 rm -rf "$ROOT"
-mkdir -p "$SOURCE_ROOT" "$PROVIDER_ROOT" "$STATE_ROOT"
+mkdir -p "$SMOKE_HOME" "$PROVIDER_ROOT" "$STATE_ROOT"
 python3 "$STATE_TOOL" init --runtime "$RUNTIME_DB" --task-index "$TASK_INDEX_DB"
 cat >"$PROVIDER_CONFIG" <<'JSON'
 {
@@ -79,24 +79,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[g7-ci] install $(uname -s) service"
-bash "$ADAPTER" install \
+echo "[g7-ci] install $(uname -s) service using caller-home ZCode discovery"
+HOME="$SMOKE_HOME" bash "$ADAPTER" install \
   --agent "$AGENT" \
   --provider-config "$PROVIDER_CONFIG" \
-  --runtime-db "$RUNTIME_DB" \
-  --task-index-db "$TASK_INDEX_DB" \
   --listen "127.0.0.1:$PORT" \
   --config "$CONFIG_PATH"
 installed=1
 
 sudo "$AGENT" doctor --config "$CONFIG_PATH"
-secret_path="$(sudo python3 - "$CONFIG_PATH" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    print(json.load(handle)["commandCodeSecret"])
-PY
-)"
+configured_runtime="$(sudo "$AGENT" config get --config "$CONFIG_PATH" --field zcode-runtime)"
+configured_task_index="$(sudo "$AGENT" config get --config "$CONFIG_PATH" --field zcode-task-index)"
+[[ "$configured_runtime" == "$RUNTIME_DB" ]] || {
+  echo "runtime DB discovery mismatch: $configured_runtime" >&2
+  exit 1
+}
+[[ "$configured_task_index" == "$TASK_INDEX_DB" ]] || {
+  echo "task-index discovery mismatch: $configured_task_index" >&2
+  exit 1
+}
+secret_path="$(sudo "$AGENT" config get --config "$CONFIG_PATH" --field command-code-secret)"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   mode="$(sudo stat -f '%Lp' "$secret_path")"
 else
@@ -123,19 +125,13 @@ installed=0
 
 rm -f "$PROVIDER_CONFIG"
 echo "[g7-ci] reinstall without plaintext provider or listen override"
-bash "$ADAPTER" install \
+HOME="$SMOKE_HOME" bash "$ADAPTER" install \
   --agent "$AGENT" \
   --provider-config "$PROVIDER_CONFIG" \
   --config "$CONFIG_PATH"
 installed=1
 sudo "$AGENT" doctor --config "$CONFIG_PATH"
-preserved_listen="$(sudo python3 - "$CONFIG_PATH" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    print(json.load(handle)["listen"])
-PY
-)"
+preserved_listen="$(sudo "$AGENT" config get --config "$CONFIG_PATH" --field listen)"
 [[ "$preserved_listen" == "127.0.0.1:$PORT" ]] || {
   echo "listen setting changed during reinstall: $preserved_listen" >&2
   exit 1
@@ -144,4 +140,4 @@ bash "$ADAPTER" start >/dev/null
 wait_state
 bash "$ADAPTER" stop
 
-echo "[g7-ci] $(uname -s) service + SecretStore + reinstall smoke PASSED"
+echo "[g7-ci] $(uname -s) service + SecretStore + home-discovery + reinstall smoke PASSED"
