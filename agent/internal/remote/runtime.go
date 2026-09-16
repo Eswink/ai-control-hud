@@ -6,23 +6,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Eswink/ai-control-hud/agent/internal/events"
 	"github.com/Eswink/ai-control-hud/agent/internal/store"
 )
 
 type Runtime struct {
 	store   *store.SnapshotStore
 	client  *Client
+	outbox  *events.Outbox
 	version string
 	config  Config
 	onError func(error)
+	now     func() time.Time
 
 	startOnce sync.Once
+	closeOnce sync.Once
 	wg        sync.WaitGroup
 }
 
 func NewRuntime(
 	store *store.SnapshotStore,
 	client *Client,
+	outbox *events.Outbox,
 	version string,
 	config Config,
 	onError func(error),
@@ -31,22 +36,39 @@ func NewRuntime(
 	return &Runtime{
 		store:   store,
 		client:  client,
+		outbox:  outbox,
 		version: version,
 		config:  config,
 		onError: onError,
+		now:     time.Now,
 	}
 }
 
 func (r *Runtime) Start(ctx context.Context) {
 	r.startOnce.Do(func() {
-		r.wg.Add(2)
+		loops := 2
+		if r.outbox != nil {
+			loops += 2
+		}
+		r.wg.Add(loops)
 		go r.snapshotLoop(ctx)
 		go r.heartbeatLoop(ctx)
+		if r.outbox != nil {
+			go r.eventObserveLoop(ctx)
+			go r.eventDeliveryLoop(ctx)
+		}
 	})
 }
 
 func (r *Runtime) Wait() {
 	r.wg.Wait()
+	if r.outbox != nil {
+		r.closeOnce.Do(func() {
+			if err := r.outbox.Close(); err != nil {
+				r.report(fmt.Errorf("close event outbox: %w", err))
+			}
+		})
+	}
 }
 
 func (r *Runtime) snapshotLoop(ctx context.Context) {
@@ -95,6 +117,64 @@ func (r *Runtime) heartbeatLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (r *Runtime) eventObserveLoop(ctx context.Context) {
+	defer r.wg.Done()
+	for {
+		if err := r.outbox.Observe(ctx, r.store.Get(), r.utcnow()); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			r.report(fmt.Errorf("event observation: %w", err))
+		}
+		if !sleepContext(ctx, r.config.EventScanInterval) {
+			return
+		}
+	}
+}
+
+func (r *Runtime) eventDeliveryLoop(ctx context.Context) {
+	defer r.wg.Done()
+	failures := 0
+	for {
+		pending, err := r.outbox.Pending(ctx, 100)
+		if err == nil && len(pending) > 0 {
+			err = r.client.UploadEvents(ctx, pending)
+			if err == nil {
+				ids := make([]string, 0, len(pending))
+				for _, event := range pending {
+					ids = append(ids, event.EventID)
+				}
+				err = r.outbox.Ack(ctx, ids)
+			}
+		}
+
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			failures++
+			r.report(fmt.Errorf("event delivery: %w", err))
+		} else {
+			failures = 0
+		}
+
+		delay := r.config.EventSendInterval
+		if failures > 0 {
+			delay = backoff(r.config.EventSendInterval, failures, r.config.MaxBackoff)
+		}
+		if !sleepContext(ctx, delay) {
+			return
+		}
+	}
+}
+
+func (r *Runtime) utcnow() time.Time {
+	if r.now == nil {
+		return time.Now().UTC()
+	}
+	return r.now().UTC()
 }
 
 func (r *Runtime) report(err error) {
