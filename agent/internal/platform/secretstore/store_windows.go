@@ -39,6 +39,7 @@ func Write(path string, record Record) error {
 		return fmt.Errorf("protect secret store directory: %w", err)
 	}
 	temporary := path + ".tmp"
+	_ = os.Remove(temporary)
 	if err := os.WriteFile(temporary, cipher, 0o600); err != nil {
 		return fmt.Errorf("write secret store: %w", err)
 	}
@@ -46,17 +47,35 @@ func Write(path string, record Record) error {
 		_ = os.Remove(temporary)
 		return fmt.Errorf("protect temporary secret store: %w", err)
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+
+	backup := path + ".bak"
+	_ = os.Remove(backup)
+	hadExisting := false
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := os.Rename(path, backup); err != nil {
+			_ = os.Remove(temporary)
+			return fmt.Errorf("stage existing secret store: %w", err)
+		}
+		hadExisting = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		_ = os.Remove(temporary)
-		return fmt.Errorf("replace secret store: %w", err)
+		return fmt.Errorf("inspect existing secret store: %w", statErr)
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		_ = os.Remove(temporary)
+		if hadExisting {
+			_ = os.Rename(backup, path)
+		}
 		return fmt.Errorf("commit secret store: %w", err)
 	}
 	if err := fileacl.Protect(path); err != nil {
+		if hadExisting {
+			_ = os.Remove(path)
+			_ = os.Rename(backup, path)
+		}
 		return fmt.Errorf("protect secret store: %w", err)
 	}
+	_ = os.Remove(backup)
 	return nil
 }
 
