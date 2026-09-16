@@ -1,14 +1,18 @@
 package architecture
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestWindowsSpecificImportsStayInsidePlatformPackages(t *testing.T) {
 	internalRoot := filepath.Clean("..")
+	files := token.NewFileSet()
 	err := filepath.WalkDir(internalRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -22,13 +26,18 @@ func TestWindowsSpecificImportsStayInsidePlatformPackages(t *testing.T) {
 		if filepath.Ext(path) != ".go" {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		parsed, err := parser.ParseFile(files, path, nil, parser.ImportsOnly)
 		if err != nil {
 			return err
 		}
-		text := string(data)
-		if strings.Contains(text, `"golang.org/x/sys/windows`) {
-			t.Errorf("Windows-specific import escaped platform boundary: %s", path)
+		for _, imported := range parsed.Imports {
+			name, err := strconv.Unquote(imported.Path.Value)
+			if err != nil {
+				return err
+			}
+			if strings.HasPrefix(name, "golang.org/x/sys/windows") {
+				t.Errorf("Windows-specific import escaped platform boundary: %s imports %s", path, name)
+			}
 		}
 		return nil
 	})
