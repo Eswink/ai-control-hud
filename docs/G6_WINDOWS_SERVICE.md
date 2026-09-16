@@ -4,7 +4,7 @@ G6 turns the foreground Go backend into a Windows-resident service without chang
 
 ## Machine layout
 
-The service deliberately separates executable, non-secret configuration, and credentials:
+The service deliberately separates executable, trusted non-secret configuration, and credentials:
 
 ```text
 %ProgramFiles%\AI Control HUD\ai-control-agent.exe
@@ -13,9 +13,9 @@ The service deliberately separates executable, non-secret configuration, and cre
 ```
 
 - The installed executable lives under `Program Files` so a LocalSystem service is not launched from a user-writable project directory.
-- `agent.json` contains only the listen address and absolute ZCode database paths.
+- `agent.json` contains only the listen address and absolute ZCode database paths, but it is still a trusted service input and is ACL-protected.
 - `commandcode.dpapi` contains the CommandCode provider record encrypted with Windows DPAPI using machine scope.
-- The protected secret file has a non-inheriting ACL for `SYSTEM`, `Administrators`, and the user who performed installation. Other local users are not granted access.
+- The `%ProgramData%\AIControlHUD` directory and its trusted files use a protected, non-inheriting DACL for `SYSTEM`, `Administrators`, and the user who performed installation. Other local users are not granted access.
 
 No API key is placed in the Windows service command line, environment, Android configuration, machine config, or logs.
 
@@ -43,17 +43,19 @@ Optional explicit ZCode paths are available if auto-discovery is not desired:
   --task-index-db C:\Users\you\.zcode\v2\tasks-index.sqlite
 ```
 
-The install operation:
+The first install operation:
 
 1. verifies that at least one ZCode database is readable;
 2. reads the existing gitignored provider mirror once;
 3. validates that it is the official CommandCode provider and has a key;
 4. writes the provider record to DPAPI SecretStore;
-5. writes machine config without credentials;
+5. writes ACL-protected machine config without credentials;
 6. copies the current executable into `Program Files`;
-7. registers `AIControlHUD` as an automatic Windows service.
+7. registers `AIControlHUD` as an automatic Windows service with bounded restart recovery actions.
 
 The plaintext import file is **not** deleted automatically. Keep it until the final target-machine service validation is complete. After the service survives restart/boot validation and `doctor --live` succeeds, it can be removed manually.
+
+After a successful first import, reinstall no longer depends on the plaintext mirror. `service remove` preserves machine config and the DPAPI SecretStore. A subsequent `service install` reuses the protected credential when the provider import file is absent, and preserves the stored listen/ZCode paths unless explicit override flags are supplied.
 
 Lifecycle commands:
 
@@ -70,6 +72,8 @@ Lifecycle commands:
 ```powershell
 .\ai-control-agent.exe service remove --purge
 ```
+
+`--purge` intentionally removes the ability to reinstall without re-importing a credential.
 
 ## Doctor
 
@@ -111,7 +115,9 @@ ai-control-agent.exe service run --config <machine-config>
 
 The platform service adapter converts SCM stop/shutdown requests into context cancellation. The existing HTTP server and collector runtime then perform the same bounded graceful shutdown used in foreground mode.
 
-Windows-specific imports are isolated under `agent/internal/platform/*`. Domain, store, API, collectors, and runtime remain platform-neutral.
+SCM recovery is configured to restart unexpected failures after 5 seconds, 15 seconds, and 60 seconds; the failure counter resets after one day. Operator-requested stop remains a normal graceful shutdown.
+
+Windows-specific imports are isolated under `agent/internal/platform/*`. A repository architecture test enforces that direct `golang.org/x/sys/windows` imports cannot escape that boundary. Domain, store, API, collectors, and runtime remain platform-neutral.
 
 ## Final target-machine gate
 
@@ -125,4 +131,4 @@ Code/CI completion does not close G6. The final gate is intentionally performed 
 6. restart the service and verify Android reconnects;
 7. reboot Windows and verify the service starts automatically without an interactive shell;
 8. only then remove the old plaintext `.local/commandcode-provider.json` if desired;
-9. verify `service remove`, reinstall, and start are reversible.
+9. run `service remove`, reinstall without the plaintext mirror, and start again to prove reversibility.
