@@ -47,6 +47,20 @@ require_systemd() {
   [[ -d /run/systemd/system ]] || { echo "systemd is not the active service manager" >&2; exit 1; }
 }
 
+secret_from_config() {
+  if ! sudo test -f "$CONFIG_PATH"; then
+    return 0
+  fi
+  sudo python3 - "$CONFIG_PATH" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle).get("commandCodeSecret", "")
+if value:
+    print(value)
+PY
+}
+
 case "$ACTION" in
   install)
     require_systemd
@@ -112,15 +126,18 @@ EOF
     ;;
   remove)
     require_systemd
+    secret_path="$(secret_from_config || true)"
     sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
     sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
     sudo rm -f "$UNIT_PATH"
     sudo systemctl daemon-reload
     sudo systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
     if [[ "$PURGE" -eq 1 ]]; then
+      [[ -z "$secret_path" ]] || sudo rm -f "$secret_path"
+      sudo rm -f "$CONFIG_PATH"
+      sudo rmdir "$(dirname "$CONFIG_PATH")" 2>/dev/null || true
       sudo rm -f "$INSTALL_DIR/ai-control-agent"
       sudo rmdir "$INSTALL_DIR" 2>/dev/null || true
-      sudo rm -rf "$(dirname "$CONFIG_PATH")"
       echo "[systemd] removed and purged"
     else
       echo "[systemd] removed; config/SecretStore and installed binary preserved"
