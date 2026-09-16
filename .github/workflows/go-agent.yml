@@ -5,6 +5,7 @@ on:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ci-agent-runtime-smoke.py'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
@@ -14,6 +15,7 @@ on:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ci-agent-runtime-smoke.py'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
@@ -29,7 +31,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            platform: windows-amd64
+          - os: ubuntu-latest
+            platform: linux-amd64
+          - os: macos-15
+            platform: darwin-arm64
+          - os: macos-15-intel
+            platform: darwin-amd64
+    name: test (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -56,6 +67,16 @@ jobs:
       - name: Build
         run: go build ./cmd/ai-control-agent
         working-directory: agent
+
+      - name: Native runtime smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python .\scripts\ci-agent-runtime-smoke.py --agent .\agent\ai-control-agent.exe
+
+      - name: Native runtime smoke (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: python3 ./scripts/ci-agent-runtime-smoke.py --agent ./agent/ai-control-agent
 
       - name: Windows service smoke
         if: runner.os == 'Windows'
