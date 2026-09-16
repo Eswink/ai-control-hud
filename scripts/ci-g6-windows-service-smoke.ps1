@@ -14,6 +14,7 @@ $taskIndexDb = Join-Path $root "tasks-index.sqlite"
 $apiKeyFile = Join-Path $root "commandcode.key"
 $implicitProviderConfig = Join-Path $repoRoot ".local\commandcode-provider.json"
 $machineConfig = Join-Path $root "state\agent.json"
+$installedAgent = Join-Path ${env:ProgramFiles} "AI Control HUD\ai-control-agent.exe"
 $port = 18787
 $baseUrl = "http://127.0.0.1:$port"
 
@@ -109,6 +110,41 @@ function Assert-ManualCommandCodeProvider {
     }
 }
 
+function Get-ProtectedStateHashes {
+    $machineState = Get-Content $machineConfig -Raw | ConvertFrom-Json
+    return [ordered]@{
+        config = (Get-FileHash -Algorithm SHA256 $machineConfig).Hash
+        secret = (Get-FileHash -Algorithm SHA256 $machineState.commandCodeSecret).Hash
+    }
+}
+
+function Assert-ProtectedStateHashes {
+    param($Expected)
+    $actual = Get-ProtectedStateHashes
+    if ($actual.config -ne $Expected.config) {
+        throw "machine config changed during service upgrade"
+    }
+    if ($actual.secret -ne $Expected.secret) {
+        throw "CommandCode DPAPI SecretStore changed during service upgrade"
+    }
+}
+
+function Assert-UpgradeScratchClean {
+    foreach ($suffix in @('.upgrade.new', '.upgrade.bak')) {
+        if (Test-Path ($installedAgent + $suffix)) {
+            throw "service upgrade scratch artifact remains: $($installedAgent + $suffix)"
+        }
+    }
+}
+
+function Assert-InstalledBinaryMatchesSource {
+    $installedHash = (Get-FileHash -Algorithm SHA256 $installedAgent).Hash
+    $sourceHash = (Get-FileHash -Algorithm SHA256 $agent).Hash
+    if ($installedHash -ne $sourceHash) {
+        throw "installed service executable does not match upgrade source"
+    }
+}
+
 $installed = $false
 try {
     Write-Host "[g6-ci] importing operator-supplied CommandCode key into DPAPI"
@@ -154,6 +190,24 @@ try {
         throw "unexpected synthetic ZCode running count: $($state.zcode.summary.running)"
     }
 
+    Write-Host "[g6-ci] upgrading while service is running"
+    $protectedBeforeUpgrade = Get-ProtectedStateHashes
+    & $agent service upgrade --source $agent
+    if ($LASTEXITCODE -ne 0) {
+        throw "running service upgrade failed with exit code $LASTEXITCODE"
+    }
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction Stop
+    if ($service.Status -ne "Running") {
+        throw "service did not return to running state after upgrade: $($service.Status)"
+    }
+    Assert-ProtectedStateHashes $protectedBeforeUpgrade
+    Assert-InstalledBinaryMatchesSource
+    Assert-UpgradeScratchClean
+    $state = Wait-AgentState
+    if ($state.zcode.health.status -ne "ok") {
+        throw "ZCode did not recover after running service upgrade"
+    }
+
     Write-Host "[g6-ci] restarting service"
     & $agent service restart
     if ($LASTEXITCODE -ne 0) {
@@ -173,6 +227,20 @@ try {
     if ($service.Status -ne "Stopped") {
         throw "service status after stop is $($service.Status)"
     }
+
+    Write-Host "[g6-ci] upgrading while service is stopped"
+    $protectedBeforeStoppedUpgrade = Get-ProtectedStateHashes
+    & $agent service upgrade --source $agent
+    if ($LASTEXITCODE -ne 0) {
+        throw "stopped service upgrade failed with exit code $LASTEXITCODE"
+    }
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction Stop
+    if ($service.Status -ne "Stopped") {
+        throw "stopped service was unexpectedly started by upgrade: $($service.Status)"
+    }
+    Assert-ProtectedStateHashes $protectedBeforeStoppedUpgrade
+    Assert-InstalledBinaryMatchesSource
+    Assert-UpgradeScratchClean
 
     Write-Host "[g6-ci] removing service while preserving machine state"
     & $agent service remove --config $machineConfig
@@ -217,7 +285,7 @@ try {
         throw "service stop after reinstall failed with exit code $LASTEXITCODE"
     }
 
-    Write-Host "[g6-ci] manual CommandCode key + SCM + DPAPI + reinstall smoke PASSED"
+    Write-Host "[g6-ci] manual CommandCode key + SCM + transactional upgrade + DPAPI + reinstall smoke PASSED"
 } finally {
     if ($installed) {
         try {
@@ -225,6 +293,9 @@ try {
         } catch {
             Write-Warning "G6 CI cleanup command failed: $($_.Exception.Message)"
         }
+    }
+    foreach ($suffix in @('.upgrade.new', '.upgrade.bak')) {
+        Remove-Item -Force ($installedAgent + $suffix) -ErrorAction SilentlyContinue
     }
     if (Test-Path $implicitProviderConfig) {
         Remove-Item -Force $implicitProviderConfig -ErrorAction SilentlyContinue
