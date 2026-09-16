@@ -95,6 +95,20 @@ function Wait-AgentState {
     throw "G6 service did not become healthy in time. Last request error: $lastError"
 }
 
+function Assert-ManualCommandCodeProvider {
+    $statusOutput = (& $agent commandcode status --config $machineConfig 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "commandcode status failed with exit code $LASTEXITCODE"
+    }
+    Write-Host $statusOutput.Trim()
+    if ($statusOutput -notmatch 'provider=command-code') {
+        throw "protected CommandCode provider is not the manually imported provider"
+    }
+    if ($statusOutput -match 'implicit-canary') {
+        throw "historical implicit provider file was unexpectedly imported"
+    }
+}
+
 $installed = $false
 try {
     Write-Host "[g6-ci] importing operator-supplied CommandCode key into DPAPI"
@@ -104,10 +118,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "commandcode configure failed with exit code $LASTEXITCODE"
     }
-    & $agent commandcode status --config $machineConfig
-    if ($LASTEXITCODE -ne 0) {
-        throw "commandcode status failed with exit code $LASTEXITCODE"
-    }
+    Assert-ManualCommandCodeProvider
 
     Write-Host "[g6-ci] installing Windows service without provider import flag"
     & $agent service install `
@@ -125,18 +136,12 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "doctor failed with exit code $LASTEXITCODE"
     }
+    Assert-ManualCommandCodeProvider
 
     Write-Host "[g6-ci] deleting operator plaintext key after protected-store validation"
     Remove-Item -Force $apiKeyFile
     if (Test-Path $apiKeyFile) {
         throw "plaintext CommandCode key still exists after deletion"
-    }
-
-    $machineState = Get-Content $machineConfig -Raw | ConvertFrom-Json
-    $protected = Get-Content $machineState.commandCodeSecret -Raw -Encoding Byte
-    $protectedText = [System.Text.Encoding]::UTF8.GetString($protected)
-    if ($protectedText -like "*must-not-be-auto-imported*") {
-        throw "historical implicit provider file was unexpectedly imported"
     }
 
     Write-Host "[g6-ci] starting LocalSystem service"
@@ -182,6 +187,7 @@ try {
     if (-not (Test-Path $machineState.commandCodeSecret)) {
         throw "DPAPI SecretStore was unexpectedly removed"
     }
+    Assert-ManualCommandCodeProvider
 
     Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore without provider flag"
     & $agent service install --config $machineConfig
@@ -194,6 +200,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "doctor after reinstall failed with exit code $LASTEXITCODE"
     }
+    Assert-ManualCommandCodeProvider
 
     & $agent service start
     if ($LASTEXITCODE -ne 0) {
