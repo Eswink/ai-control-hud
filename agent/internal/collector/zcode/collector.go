@@ -20,28 +20,20 @@ import (
 
 var statusSeparators = regexp.MustCompile(`[\s-]+`)
 
-var runningStatuses = map[string]struct{}{
-	"running": {}, "in_progress": {}, "inprogress": {}, "active": {}, "working": {}, "executing": {},
-}
-var waitingStatuses = map[string]struct{}{
-	"waiting": {}, "queued": {}, "pending": {}, "ready": {}, "todo": {},
-}
-var failedStatuses = map[string]struct{}{
-	"failed": {}, "failure": {}, "error": {}, "errored": {},
-}
-var completedStatuses = map[string]struct{}{
-	"completed": {}, "complete": {}, "done": {}, "success": {}, "succeeded": {}, "finished": {},
-}
+var runningStatuses = setOf("running", "in_progress", "inprogress", "active", "working", "executing")
+var waitingStatuses = setOf("waiting", "queued", "pending", "ready", "todo")
+var failedStatuses = setOf("failed", "failure", "error", "errored")
+var completedStatuses = setOf("completed", "complete", "done", "success", "succeeded", "finished")
 
-var goalTargetColumns = stringSet(
+var goalTargetColumns = setOf(
 	"session_id", "objective", "status", "time_used_seconds", "time_updated",
 	"summary_title", "active_run_started_at", "active_run_last_seen_at",
 )
-var goalTodoColumns = stringSet("session_id", "content", "status", "position")
-var goalSessionColumns = stringSet(
+var goalTodoColumns = setOf("session_id", "content", "status", "position")
+var goalSessionColumns = setOf(
 	"id", "directory", "path", "title", "summary_additions", "summary_deletions",
 )
-var taskIndexColumns = stringSet(
+var taskIndexColumns = setOf(
 	"workspace_key", "workspace_path", "task_id", "title", "task_status",
 	"updated_at", "pinned", "archived", "deleted",
 )
@@ -112,6 +104,29 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 	return nil, errors.New("ZCode task sources are unavailable")
 }
 
+type goalRow struct {
+	SessionID           string
+	Objective           sql.NullString
+	Status              sql.NullString
+	TimeUsedSeconds     sql.NullInt64
+	TimeUpdated         sql.NullInt64
+	SummaryTitle        sql.NullString
+	ActiveRunStartedAt  sql.NullInt64
+	ActiveRunLastSeenAt sql.NullInt64
+	Directory           sql.NullString
+	Path                sql.NullString
+	SessionTitle        sql.NullString
+	SummaryAdditions    sql.NullInt64
+	SummaryDeletions    sql.NullInt64
+}
+
+type todoRow struct {
+	SessionID string
+	Content   string
+	Status    sql.NullString
+	Position  int
+}
+
 func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 	db, err := openReadOnly(c.RuntimeDB)
 	if err != nil {
@@ -126,14 +141,7 @@ func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 		return nil, false, errors.New("ZCode live Goal database read failed")
 	}
 
-	limit := c.TaskLimit
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
+	limit := bounded(c.TaskLimit, 20, 100)
 	rows, err := db.QueryContext(ctx, `
 		SELECT st.session_id, st.objective, st.status,
 		       st.time_used_seconds, st.time_updated,
@@ -184,8 +192,7 @@ func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 	now := c.Now().UTC()
 	tasks := make([]domain.TaskSummary, 0, limit)
 	for _, row := range goalRows {
-		task := c.goalTask(row, todos[row.SessionID], now)
-		if task != nil {
+		if task := c.goalTask(row, todos[row.SessionID], now); task != nil {
 			tasks = append(tasks, *task)
 		}
 		if len(tasks) >= limit {
@@ -205,12 +212,7 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 		updatedAt = timestamp(row.TimeUpdated)
 	}
 	startedAt := timestamp(row.ActiveRunStartedAt)
-
-	heartbeatSeconds := c.HeartbeatSeconds
-	if heartbeatSeconds <= 0 {
-		heartbeatSeconds = 120
-	}
-	heartbeatFresh := heartbeat != nil && ageSeconds(now, *heartbeat) <= float64(heartbeatSeconds)
+	heartbeatFresh := heartbeat != nil && ageSeconds(now, *heartbeat) <= float64(bounded(c.HeartbeatSeconds, 120, 3600))
 
 	todoStatuses := make([]domain.TaskStatus, len(todos))
 	for i, todo := range todos {
@@ -234,11 +236,7 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 		if targetStatus != domain.TaskFailed && targetStatus != domain.TaskCompleted {
 			return nil
 		}
-		terminalSeconds := c.RecentTerminalSeconds
-		if terminalSeconds <= 0 {
-			terminalSeconds = 1800
-		}
-		if updatedAt == nil || ageSeconds(now, *updatedAt) > float64(terminalSeconds) {
+		if updatedAt == nil || ageSeconds(now, *updatedAt) > float64(bounded(c.RecentTerminalSeconds, 1800, 86400)) {
 			return nil
 		}
 		status = targetStatus
@@ -248,8 +246,7 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 	for _, wanted := range []domain.TaskStatus{domain.TaskRunning, domain.TaskWaiting} {
 		for i, todo := range todos {
 			if todoStatuses[i] == wanted {
-				text := truncate(strings.TrimSpace(todo.Content), 500)
-				if text != "" {
+				if text := truncate(strings.TrimSpace(todo.Content), 500); text != "" {
 					activity = &text
 					break
 				}
@@ -265,9 +262,9 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 		title = "Goal mode"
 	}
 
-	var changes *domain.TaskChanges
 	additions := nonnegativeInt(row.SummaryAdditions)
 	deletions := nonnegativeInt(row.SummaryDeletions)
+	var changes *domain.TaskChanges
 	if additions != nil || deletions != nil {
 		changes = &domain.TaskChanges{Additions: additions, Deletions: deletions}
 	}
@@ -277,8 +274,8 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 		seconds := int(ageSeconds(now, *startedAt))
 		duration = &seconds
 	}
-
 	workspace := workspaceLabel(row.Path.String, row.Directory.String)
+
 	return &domain.TaskSummary{
 		ID:              goalID(row.SessionID),
 		Title:           title,
@@ -302,17 +299,8 @@ func (c *Collector) collectTaskIndex(ctx context.Context) (*Snapshot, error) {
 		return nil, errors.New("Unsupported ZCode task index schema")
 	}
 
-	limit := c.TaskLimit
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	maxAge := c.TaskMaxAgeSeconds
-	if maxAge <= 0 {
-		maxAge = 86400
-	}
+	limit := bounded(c.TaskLimit, 20, 100)
+	maxAge := bounded(c.TaskMaxAgeSeconds, 86400, 30*86400)
 	cutoffMS := c.Now().UTC().Add(-time.Duration(maxAge) * time.Second).UnixMilli()
 
 	rows, err := db.QueryContext(ctx, `
@@ -375,29 +363,6 @@ func (c *Collector) collectTaskIndex(ctx context.Context) (*Snapshot, error) {
 	return &Snapshot{Summary: counts, Tasks: tasks}, nil
 }
 
-type goalRow struct {
-	SessionID           string
-	Objective           sql.NullString
-	Status              sql.NullString
-	TimeUsedSeconds     sql.NullInt64
-	TimeUpdated         sql.NullInt64
-	SummaryTitle        sql.NullString
-	ActiveRunStartedAt  sql.NullInt64
-	ActiveRunLastSeenAt sql.NullInt64
-	Directory           sql.NullString
-	Path                sql.NullString
-	SessionTitle        sql.NullString
-	SummaryAdditions    sql.NullInt64
-	SummaryDeletions    sql.NullInt64
-}
-
-type todoRow struct {
-	SessionID string
-	Content   string
-	Status    sql.NullString
-	Position  int
-}
-
 func loadTodos(ctx context.Context, db *sql.DB, sessionIDs []string) (map[string][]todoRow, error) {
 	result := make(map[string][]todoRow, len(sessionIDs))
 	if len(sessionIDs) == 0 {
@@ -410,8 +375,10 @@ func loadTodos(ctx context.Context, db *sql.DB, sessionIDs []string) (map[string
 		args[i] = id
 		result[id] = nil
 	}
-	query := `SELECT session_id, content, status, position FROM todo WHERE session_id IN (` + strings.Join(placeholders, ",") + `) ORDER BY session_id, position`
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx,
+		`SELECT session_id, content, status, position FROM todo WHERE session_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY session_id, position`,
+		args...,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -427,16 +394,12 @@ func loadTodos(ctx context.Context, db *sql.DB, sessionIDs []string) (map[string
 }
 
 func verifyGoalSchema(ctx context.Context, db *sql.DB) error {
-	checks := []struct {
-		table string
-		need  map[string]struct{}
-	}{
-		{"session_target", goalTargetColumns},
-		{"todo", goalTodoColumns},
-		{"session", goalSessionColumns},
-	}
-	for _, check := range checks {
-		if err := verifyTableColumns(ctx, db, check.table, check.need); err != nil {
+	for table, required := range map[string]map[string]struct{}{
+		"session_target": goalTargetColumns,
+		"todo":           goalTodoColumns,
+		"session":        goalSessionColumns,
+	} {
+		if err := verifyTableColumns(ctx, db, table, required); err != nil {
 			return errGoalSchemaUnavailable
 		}
 	}
@@ -455,21 +418,23 @@ func verifyTableColumns(ctx context.Context, db *sql.DB, table string, required 
 	defer rows.Close()
 	columns := map[string]struct{}{}
 	for rows.Next() {
-		var cid int
+		var cid, notNull, pk int
 		var name, typ string
-		var notNull, pk int
 		var defaultValue any
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
 			return err
 		}
 		columns[name] = struct{}{}
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 	for name := range required {
 		if _, ok := columns[name]; !ok {
 			return fmt.Errorf("missing column %s.%s", table, name)
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func openReadOnly(path string) (*sql.DB, error) {
@@ -477,10 +442,19 @@ func openReadOnly(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	u := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+
+	// RFC 8089 absolute file URLs require a leading slash before a Windows
+	// drive letter. Without it `D:/...` becomes a drive-relative URI and the
+	// SQLite driver can open a different database than the file we inspected.
+	urlPath := filepath.ToSlash(absolute)
+	if !strings.HasPrefix(urlPath, "/") {
+		urlPath = "/" + urlPath
+	}
+	u := &url.URL{Scheme: "file", Path: urlPath}
 	query := u.Query()
 	query.Set("mode", "ro")
 	u.RawQuery = query.Encode()
+
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		return nil, err
@@ -617,7 +591,7 @@ func optionalString(value string) *string {
 	return &value
 }
 
-func stringSet(values ...string) map[string]struct{} {
+func setOf(values ...string) map[string]struct{} {
 	result := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		result[value] = struct{}{}
@@ -671,6 +645,16 @@ func boundedPositiveEnv(name string, fallback, maximum int) int {
 		return maximum
 	}
 	return parsed
+}
+
+func bounded(value, fallback, maximum int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
 }
 
 func truncate(value string, limit int) string {
