@@ -52,6 +52,18 @@ require_systemd() {
   [[ -d /run/systemd/system ]] || { echo "systemd is not the active service manager" >&2; exit 1; }
 }
 
+caller_home() {
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] && command -v getent >/dev/null 2>&1; then
+    local resolved
+    resolved="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    if [[ -n "$resolved" ]]; then
+      printf '%s\n' "$resolved"
+      return
+    fi
+  fi
+  printf '%s\n' "$HOME"
+}
+
 secret_from_config() {
   if ! sudo test -f "$CONFIG_PATH"; then
     return 0
@@ -74,6 +86,20 @@ case "$ACTION" in
     existing_config=0
     if sudo test -f "$config_abs"; then
       existing_config=1
+    fi
+
+    if [[ "$existing_config" -eq 0 ]]; then
+      home_hint="$(caller_home)"
+      if [[ -z "$RUNTIME_DB" && -f "$home_hint/.zcode/cli/db/db.sqlite" ]]; then
+        RUNTIME_DB="$home_hint/.zcode/cli/db/db.sqlite"
+      fi
+      if [[ -z "$TASK_INDEX_DB" && -f "$home_hint/.zcode/v2/tasks-index.sqlite" ]]; then
+        TASK_INDEX_DB="$home_hint/.zcode/v2/tasks-index.sqlite"
+      fi
+      if [[ -z "$RUNTIME_DB" && -z "$TASK_INDEX_DB" ]]; then
+        echo "No ZCode database found under $home_hint/.zcode; pass --runtime-db and/or --task-index-db" >&2
+        exit 1
+      fi
     fi
 
     sudo install -d -m 0755 "$INSTALL_DIR"
