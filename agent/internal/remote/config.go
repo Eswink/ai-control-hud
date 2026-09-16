@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	AutoBaseURL              = "auto://lan"
 	defaultAgentID           = "desktop-main"
 	defaultRequestTimeout    = 4 * time.Second
 	defaultSnapshotInterval  = 5 * time.Second
@@ -58,7 +59,12 @@ func FromEnvironment() (Config, bool, error) {
 }
 
 func (c *Config) normalize() {
-	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
+	baseURL := strings.TrimSpace(c.BaseURL)
+	if strings.EqualFold(baseURL, "auto") || strings.EqualFold(baseURL, AutoBaseURL) {
+		c.BaseURL = AutoBaseURL
+	} else {
+		c.BaseURL = strings.TrimRight(baseURL, "/")
+	}
 	c.AgentID = strings.TrimSpace(c.AgentID)
 	c.Token = strings.TrimSpace(c.Token)
 	if c.RequestTimeout <= 0 {
@@ -81,17 +87,24 @@ func (c *Config) normalize() {
 	}
 }
 
+func (c Config) IsAutoDiscover() bool {
+	c.normalize()
+	return c.BaseURL == AutoBaseURL
+}
+
 func (c Config) Validate() error {
 	c.normalize()
 	if c.BaseURL == "" {
 		return errors.New("AI_CONTROL_HUB_URL is required when remote hub upload is enabled")
 	}
-	parsed, err := url.Parse(c.BaseURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return errors.New("AI_CONTROL_HUB_URL must be an absolute http/https URL")
-	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("AI_CONTROL_HUB_URL must not contain a query or fragment")
+	if c.BaseURL != AutoBaseURL {
+		parsed, err := url.Parse(c.BaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return errors.New("AI_CONTROL_HUB_URL must be an absolute http/https URL or auto")
+		}
+		if parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("AI_CONTROL_HUB_URL must not contain a query or fragment")
+		}
 	}
 	if c.AgentID == "" {
 		return errors.New("AI_CONTROL_HUB_AGENT_ID must not be empty")
