@@ -5,19 +5,21 @@ This procedure validates V2/G4 without changing the Android phone or the product
 ## Safety model
 
 - Python remains the reference backend on `0.0.0.0:8787`.
-- Go binds only to `127.0.0.1:8788` during shadow validation.
+- Go binds only to `127.0.0.1:8788` during live shadow validation.
 - Android continues talking to Python/8787.
 - Both processes read ZCode sources read-only.
 - The Go process reuses the existing gitignored `.local/commandcode-provider.json` through `HUD_ZCODE_CONFIG`.
 - The comparison output contains normalized HUD state only; it never includes the provider API key.
 
-## 1. Update the repository
+## Live-source parity
+
+### 1. Update the repository
 
 ```powershell
 git pull
 ```
 
-## 2. Keep the Python reference running
+### 2. Keep the Python reference running
 
 If it is not already running:
 
@@ -31,7 +33,7 @@ Verify:
 curl http://127.0.0.1:8787/api/v1/state
 ```
 
-## 3. Place the CI-built Go executable
+### 3. Place the CI-built Go executable
 
 Create the local binary directory:
 
@@ -47,7 +49,7 @@ Extract/copy the CI artifact executable to:
 
 The entire `.local/` tree is ignored by Git.
 
-## 4. Start the Go candidate
+### 4. Start the Go candidate
 
 Open a second PowerShell in the repository root:
 
@@ -69,7 +71,7 @@ Verify the Go endpoint independently:
 curl http://127.0.0.1:8788/api/v1/state
 ```
 
-## 5. Compare normalized semantics
+### 5. Compare normalized semantics
 
 Open a third PowerShell:
 
@@ -95,17 +97,55 @@ Numeric deltas are reported, not treated as exact equality, for:
 
 Those values can move between the two collection instants.
 
-## 6. G4 acceptance observations
+## Deterministic lifecycle parity
 
-Repeat comparison during at least these states before Windows cutover:
+Long-running real Goal loops are **not** a release gate. A Goal that naturally runs for many hours must not force the migration to wait for a terminal transition.
 
-1. active Goal running;
-2. Goal transition or completion;
-3. idle period;
-4. Go process restart while Python remains alive;
-5. one temporary source failure/recovery test after normal parity is proven.
+After live normal-work parity and a Go backend restart have passed, run the isolated lifecycle harness instead:
 
-The migration does not advance to port 8787 merely because the binaries compile. Semantic parity on the target Windows machine is the gate.
+```powershell
+.\scripts\g4-deterministic-parity.ps1
+```
+
+The harness uses only local test resources:
+
+- Python on `127.0.0.1:8797`;
+- Go on `127.0.0.1:8798`;
+- a temporary synthetic Goal SQLite database under `.local\g4-parity`;
+- an empty synthetic task index;
+- a provider config with no providers, so no real CommandCode credential or billing request is used.
+
+It automatically proves these states against both implementations:
+
+```text
+running
+  -> source files unavailable
+  -> stale + last-known-good
+  -> source files restored
+  -> ok + recovered running state
+  -> completed
+  -> idle with zero current tasks
+```
+
+It writes per-stage comparisons plus:
+
+```text
+.local\g4-parity\summary.json
+```
+
+The harness never binds 8787/8788, never writes the real ZCode database, never changes the Android server URL, and never touches the real provider mirror.
+
+## G4 acceptance
+
+Before Windows cutover, require all of the following:
+
+1. real target-machine normal-work parity on Python 8787 vs Go 8788;
+2. Go backend restart while Python remains alive, followed by parity again;
+3. deterministic `running -> completed -> idle` parity using the isolated harness;
+4. deterministic source failure -> `stale + last-known-good` -> recovery parity using the isolated harness;
+5. no unexplained semantic drift.
+
+A natural completion of a many-hour real Goal is useful additional evidence, but it is not required to unblock the migration.
 
 ## Rollback
 

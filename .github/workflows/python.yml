@@ -6,12 +6,14 @@ on:
       - 'pyproject.toml'
       - 'server/**'
       - 'tools/**'
+      - 'scripts/**'
       - '.github/workflows/python.yml'
   pull_request:
     paths:
       - 'pyproject.toml'
       - 'server/**'
       - 'tools/**'
+      - 'scripts/**'
       - '.github/workflows/python.yml'
   workflow_dispatch:
 
@@ -40,3 +42,28 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Compile helper scripts
+        run: python -m py_compile scripts/g4_state_db.py
+
+      - name: Validate PowerShell syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($file in Get-ChildItem scripts -Filter '*.ps1') {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $failed = $true
+              foreach ($parseError in $parseErrors) {
+                Write-Host "PowerShell parse error in $($file.Name): $($parseError.Message)"
+              }
+            }
+          }
+          if ($failed) { exit 1 }
