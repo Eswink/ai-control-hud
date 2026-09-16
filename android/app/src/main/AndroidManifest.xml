@@ -10,6 +10,7 @@
     </queries>
 
     <application
+        android:name=".HudApplication"
         android:allowBackup="false"
         android:label="AI Control HUD"
         android:supportsRtl="true"
