@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Eswink/ai-control-hud/agent/internal/domain"
+	"github.com/Eswink/ai-control-hud/agent/internal/events"
 )
 
 type Client struct {
@@ -28,6 +29,12 @@ type heartbeatEnvelope struct {
 	AgentID      string    `json:"agentId"`
 	SentAt       time.Time `json:"sentAt"`
 	AgentVersion string    `json:"agentVersion,omitempty"`
+}
+
+type eventEnvelope struct {
+	AgentID string         `json:"agentId"`
+	SentAt  time.Time      `json:"sentAt"`
+	Events  []events.Event `json:"events"`
 }
 
 func NewClient(config Config) (*Client, error) {
@@ -58,6 +65,25 @@ func (c *Client) Heartbeat(ctx context.Context, version string) error {
 		AgentID:      c.config.AgentID,
 		SentAt:       c.now().UTC(),
 		AgentVersion: version,
+	})
+}
+
+func (c *Client) UploadEvents(ctx context.Context, batch []events.Event) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	if len(batch) > 100 {
+		return fmt.Errorf("event upload batch exceeds 100 events")
+	}
+	for i, event := range batch {
+		if err := event.Validate(); err != nil {
+			return fmt.Errorf("refuse invalid event upload at index %d: %w", i, err)
+		}
+	}
+	return c.postJSON(ctx, "/api/v1/agent/events", eventEnvelope{
+		AgentID: c.config.AgentID,
+		SentAt:  c.now().UTC(),
+		Events:  batch,
 	})
 }
 
