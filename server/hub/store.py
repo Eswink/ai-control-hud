@@ -127,8 +127,6 @@ class HubStore:
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
-                # Any authenticated event delivery also proves that the agent was alive at
-                # received_at. A normal heartbeat still provides the steady-state signal.
                 self._upsert_agent(
                     agent_id=agent_id,
                     sent_at=sent_at,
@@ -183,7 +181,14 @@ class HubStore:
         last_seen_at = datetime.fromisoformat(row["last_seen_at"])
         return state, last_seen_at
 
-    def list_events(self, agent_id: str, after: int, limit: int) -> list[HubEvent]:
+    def list_events_with_latest(
+        self,
+        agent_id: str,
+        after: int,
+        limit: int,
+    ) -> tuple[list[HubEvent], int]:
+        # Keep page rows and the high-water mark under the same process lock so
+        # Android can safely establish a first-run baseline without a local race.
         with self._lock:
             rows = self._connection.execute(
                 """
@@ -195,6 +200,10 @@ class HubStore:
                 """,
                 (agent_id, after, limit),
             ).fetchall()
+            latest_row = self._connection.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS latest_seq FROM events WHERE agent_id = ?",
+                (agent_id,),
+            ).fetchone()
 
         result: list[HubEvent] = []
         for row in rows:
@@ -207,7 +216,8 @@ class HubStore:
                     received_at=datetime.fromisoformat(row["received_at"]),
                 )
             )
-        return result
+        latest_seq = int(latest_row["latest_seq"]) if latest_row is not None else 0
+        return result, latest_seq
 
     def _upsert_agent(
         self,
