@@ -15,6 +15,8 @@ on:
     paths:
       - 'agent/**'
       - 'scripts/package-agent-release.py'
+      - 'scripts/hub_bundle.py'
+      - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
       - 'scripts/ai-control-hub-systemd.sh'
       - 'scripts/ai-control-hub-lan-doctor.sh'
@@ -185,14 +187,15 @@ jobs:
         run: |
           set -euo pipefail
           archive="ai-control-hub_${VERSION}_linux-amd64.zip"
-          python3 scripts/package-h3-validation.py \
+          python3 scripts/package-hub-bundle.py \
             --hub-binary dist/ai-control-hub \
+            --version "$VERSION" \
             --output "dist/$archive"
           rm dist/ai-control-hub
           (cd dist && sha256sum "$archive" > "$archive.sha256")
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
-      - name: Verify Hub bundle and embedded version
+      - name: Verify Hub bundle metadata and embedded version
         shell: bash
         run: |
           set -euo pipefail
@@ -200,6 +203,10 @@ jobs:
           trap 'rm -rf "$tmp"' EXIT
           unzip -q "dist/$ARCHIVE" -d "$tmp"
           test "$("$tmp/ai-control-hub" version)" = "$VERSION"
+          grep -Fxq 'bundle_schema=1' "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'component=ai-control-hub' "$tmp/BUILD_INFO.txt"
+          grep -Fxq "version=$VERSION" "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'entrypoint=docs/HUB_DEPLOYMENT.md' "$tmp/BUILD_INFO.txt"
           (
             cd "$tmp"
             sha256sum -c SHA256SUMS
