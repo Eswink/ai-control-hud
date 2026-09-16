@@ -1,0 +1,149 @@
+name: Go Hub CI
+
+on:
+  push:
+    paths:
+      - 'agent/cmd/ai-control-hub/**'
+      - 'agent/internal/hub/**'
+      - 'agent/internal/domain/**'
+      - 'agent/internal/events/event.go'
+      - 'agent/go.mod'
+      - 'agent/go.sum'
+      - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/package-h3-validation.py'
+      - 'docs/H3_FIELD_VALIDATION.md'
+      - 'docs/HUB_DEPLOYMENT.md'
+      - '.github/workflows/go-hub.yml'
+  pull_request:
+    paths:
+      - 'agent/cmd/ai-control-hub/**'
+      - 'agent/internal/hub/**'
+      - 'agent/internal/domain/**'
+      - 'agent/internal/events/event.go'
+      - 'agent/go.mod'
+      - 'agent/go.sum'
+      - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/package-h3-validation.py'
+      - 'docs/H3_FIELD_VALIDATION.md'
+      - 'docs/HUB_DEPLOYMENT.md'
+      - '.github/workflows/go-hub.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+
+      - name: Vet and test Go Hub
+        working-directory: agent
+        run: |
+          go vet ./internal/hub ./cmd/ai-control-hub
+          go test ./internal/hub ./cmd/ai-control-hub
+
+      - name: Resolve build version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            version="0.0.0-pr.${{ github.event.pull_request.number }}"
+          else
+            version="0.0.0-dev.${GITHUB_SHA:0:12}"
+          fi
+          echo "HUB_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Reproducible static Linux build
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist build-a build-b
+          ldflags="-s -w -buildid= -X main.version=$HUB_VERSION"
+          (
+            cd agent
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o ../build-a/ai-control-hub ./cmd/ai-control-hub
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o ../build-b/ai-control-hub ./cmd/ai-control-hub
+          )
+          cmp build-a/ai-control-hub build-b/ai-control-hub
+          cp build-a/ai-control-hub dist/ai-control-hub
+          test "$(dist/ai-control-hub version)" = "$HUB_VERSION"
+          file dist/ai-control-hub
+          file dist/ai-control-hub | grep -Fq 'statically linked'
+          sha256sum dist/ai-control-hub > dist/ai-control-hub.sha256
+
+      - name: Go Hub runtime smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'kill ${hub_pid:-0} 2>/dev/null || true; rm -rf "$tmp"' EXIT
+          export HUD_HUB_DB="$tmp/hub.sqlite3"
+          export HUD_HUB_AGENT_ID=desktop-main
+          export HUD_HUB_AGENT_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          export HUD_HUB_STALE_AFTER_SECONDS=45
+          export HUD_HUB_ID=ci-hub
+          export HUD_HUB_DISCOVERY_ENABLED=0
+          export HUD_HUB_DISCOVERY_PORT=8788
+          export HUD_HUB_HTTP_SCHEME=http
+          export HUD_HUB_HTTP_PORT=18787
+          dist/ai-control-hub serve --host 127.0.0.1 --port 18787 >"$tmp/hub.log" 2>&1 &
+          hub_pid=$!
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18787/api/v1/health >"$tmp/health.json"; then
+              break
+            fi
+            sleep 0.2
+          done
+          python3 - "$tmp/health.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as f:
+              body = json.load(f)
+          assert body['schemaVersion'] == 1
+          assert body['status'] == 'ok'
+          PY
+          kill "$hub_pid"
+          wait "$hub_pid" || true
+          hub_pid=0
+
+      - name: Validate Go Hub systemd assets
+        shell: bash
+        run: bash ./scripts/ci-hub-deployment-smoke.sh
+
+      - name: Build binary-only H3 validation bundle
+        run: |
+          python3 scripts/package-h3-validation.py \
+            --hub-binary dist/ai-control-hub \
+            --output dist/ai-control-hub-h3-validation.zip
+          unzip -l dist/ai-control-hub-h3-validation.zip
+
+      - name: Upload Go Hub binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hub-linux-amd64
+          path: |
+            dist/ai-control-hub
+            dist/ai-control-hub.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload H3 validation bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hub-h3-validation-bundle
+          path: dist/ai-control-hub-h3-validation.zip
+          if-no-files-found: error
+          retention-days: 90
