@@ -5,6 +5,8 @@ on:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ci-g6-windows-service-smoke.ps1'
+      - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - '.github/workflows/go-agent.yml'
@@ -12,6 +14,8 @@ on:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ci-g6-windows-service-smoke.ps1'
+      - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - '.github/workflows/go-agent.yml'
@@ -52,6 +56,11 @@ jobs:
       - name: Build
         run: go build ./cmd/ai-control-agent
         working-directory: agent
+
+      - name: Windows service smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\ci-g6-windows-service-smoke.ps1
 
       - name: Upload Windows agent
         if: runner.os == 'Windows'
