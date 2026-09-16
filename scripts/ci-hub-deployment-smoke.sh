@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/scripts/ai-control-hub-systemd.sh"
+LAN_DOCTOR_SMOKE="$ROOT/scripts/ci-hub-lan-doctor-smoke.sh"
 
 bash -n "$INSTALLER"
+bash -n "$LAN_DOCTOR_SMOKE"
 
 unit_default="$(bash "$INSTALLER" render-unit)"
 grep -Fq 'ExecStart=/usr/local/lib/ai-control-hub/ai-control-hub serve --host 127.0.0.1 --port 8787' <<<"$unit_default"
@@ -54,5 +56,7 @@ if bash "$INSTALLER" render-unit --lan-auto --discovery-port 70000 >/dev/null 2>
   echo "invalid discovery port was accepted" >&2
   exit 1
 fi
+
+bash "$LAN_DOCTOR_SMOKE"
 
 echo "[hub-deployment-smoke] ok"
