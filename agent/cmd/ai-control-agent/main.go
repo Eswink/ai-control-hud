@@ -219,3 +219,10 @@ func enabledLabel(enabled bool) string {
 	}
 	return "disabled"
 }
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
