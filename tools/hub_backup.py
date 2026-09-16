@@ -39,7 +39,9 @@ def backup_database(source: Path, destination: Path) -> Path:
         target_db = None
         os.chmod(temporary, 0o600)
 
-        with temporary.open("rb") as handle:
+        # Windows rejects fsync on a read-only CRT descriptor. The backup is
+        # already complete; open read/write only to request a durable flush.
+        with temporary.open("r+b") as handle:
             os.fsync(handle.fileno())
         temporary.replace(destination)
         return destination
