@@ -15,6 +15,7 @@ import (
 	"github.com/Eswink/ai-control-hud/agent/internal/collector/zcode"
 	"github.com/Eswink/ai-control-hud/agent/internal/domain"
 	"github.com/Eswink/ai-control-hud/agent/internal/machineconfig"
+	"github.com/Eswink/ai-control-hud/agent/internal/platform/firewall"
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/secretstore"
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/winservice"
 	agentruntime "github.com/Eswink/ai-control-hud/agent/internal/runtime"
@@ -25,6 +26,7 @@ const (
 	windowsServiceName        = "AIControlHUD"
 	windowsServiceDisplayName = "AI Control HUD Agent"
 	windowsServiceDescription = "AI Control HUD local telemetry agent"
+	windowsFirewallRuleName   = "AI Control HUD Agent"
 )
 
 func runServiceCommand(args []string) error {
@@ -166,7 +168,15 @@ func serviceInstall(args []string) error {
 	if err := copyExecutable(absolute(sourceExecutable), targetExecutable); err != nil {
 		return err
 	}
+	if firewall.Supported() {
+		if err := firewall.Install(windowsFirewallRuleName, targetExecutable, listenValue); err != nil {
+			return err
+		}
+	}
 	if err := winservice.Install(windowsServiceName, windowsServiceDisplayName, windowsServiceDescription, targetExecutable, resolvedConfig); err != nil {
+		if firewall.Supported() {
+			_ = firewall.Remove(windowsFirewallRuleName)
+		}
 		return err
 	}
 
@@ -175,6 +185,9 @@ func serviceInstall(args []string) error {
 	fmt.Printf("[service] config=%s\n", resolvedConfig)
 	fmt.Printf("[service] zcode-runtime=%s\n", resolvedRuntime)
 	fmt.Printf("[service] zcode-task-index=%s\n", resolvedTaskIndex)
+	if firewall.Supported() {
+		fmt.Println("[service] Windows Firewall inbound rule=private,domain")
+	}
 	if importedCredential {
 		fmt.Println("[service] CommandCode credential imported to Windows DPAPI SecretStore")
 		fmt.Println("[service] plaintext provider import file was not modified; remove it only after service validation")
@@ -202,6 +215,11 @@ func serviceRemove(args []string) error {
 	}
 	if err := winservice.Remove(windowsServiceName); err != nil {
 		return err
+	}
+	if firewall.Supported() {
+		if err := firewall.Remove(windowsFirewallRuleName); err != nil {
+			return err
+		}
 	}
 	fmt.Println("[service] removed")
 	if *purge {
