@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Eswink/ai-control-hud/agent/internal/collector/commandcode"
 	"github.com/Eswink/ai-control-hud/agent/internal/collector/zcode"
 	"github.com/Eswink/ai-control-hud/agent/internal/machineconfig"
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/secretstore"
@@ -23,7 +22,7 @@ func runConfigure(args []string) error {
 		return err
 	}
 	configPath := flags.String("config", defaultConfig, "machine configuration path")
-	providerConfig := flags.String("provider-config", defaultProviderConfigPath(), "CommandCode provider import file")
+	providerConfig := flags.String("provider-config", "", "explicit one-time CommandCode provider import file")
 	listen := flags.String("listen", "127.0.0.1:8787", "HTTP listen address")
 	runtimeDB := flags.String("runtime-db", "", "ZCode runtime Goal database")
 	taskIndexDB := flags.String("task-index-db", "", "ZCode task index database")
@@ -69,29 +68,9 @@ func runConfigure(args []string) error {
 	if hasExisting && existing.CommandCodeSecret != "" {
 		secretPath = existing.CommandCodeSecret
 	}
-	providerPath := absolute(*providerConfig)
-	imported := false
-	if fileExists(providerPath) {
-		provider, loadErr := commandcode.LoadProvider(providerPath, "")
-		if loadErr != nil {
-			return loadErr
-		}
-		if err := commandcode.ValidateProvider(provider, false); err != nil {
-			return err
-		}
-		record := secretstore.Record{ProviderID: provider.ID, BaseURL: provider.BaseURL, APIKey: provider.APIKey}
-		if err := secretstore.Write(secretPath, record); err != nil {
-			return fmt.Errorf("write platform SecretStore: %w", err)
-		}
-		imported = true
-	} else {
-		record, readErr := secretstore.Read(secretPath)
-		if readErr != nil {
-			return fmt.Errorf("provider import file is unavailable and existing SecretStore cannot be read: %w", readErr)
-		}
-		if err := commandcode.ValidateProvider(providerFromSecret(record), false); err != nil {
-			return err
-		}
+	imported, err := prepareCommandCodeSecret(flags, *providerConfig, secretPath)
+	if err != nil {
+		return err
 	}
 
 	hubSecretPath, hubConfigured, hubTokenImported, err := configureProtectedHubSecret(flags, resolvedConfig, hubFlags)
@@ -107,7 +86,7 @@ func runConfigure(args []string) error {
 	fmt.Printf("[configure] zcode-runtime=%s\n", config.ZCodeRuntimeDB)
 	fmt.Printf("[configure] zcode-task-index=%s\n", config.ZCodeTaskIndexDB)
 	if imported {
-		fmt.Println("[configure] CommandCode credential imported to platform SecretStore")
+		fmt.Println("[configure] CommandCode credential imported from explicit provider file to platform SecretStore")
 	} else {
 		fmt.Println("[configure] existing platform SecretStore reused")
 	}
