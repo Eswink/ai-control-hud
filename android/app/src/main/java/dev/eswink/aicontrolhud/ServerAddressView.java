@@ -2,8 +2,9 @@ package dev.eswink.aicontrolhud;
 
 import android.content.Context;
 import android.util.AttributeSet;
+import android.widget.TextView;
 
-public final class ServerAddressView extends androidx.appcompat.widget.AppCompatTextView {
+public final class ServerAddressView extends TextView {
     public ServerAddressView(Context context) {
         super(context);
     }
