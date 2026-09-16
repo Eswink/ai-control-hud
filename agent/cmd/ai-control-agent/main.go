@@ -19,7 +19,7 @@ import (
 	"github.com/Eswink/ai-control-hud/agent/internal/store"
 )
 
-var version = "0.2.0-go-dev"
+var version = "0.3.0-go-dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -29,12 +29,18 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) > 0 && args[0] == "version" {
-		fmt.Println(version)
-		return nil
-	}
-	if len(args) > 0 && args[0] == "run" {
-		args = args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "version":
+			fmt.Println(version)
+			return nil
+		case "service":
+			return runServiceCommand(args[1:])
+		case "doctor":
+			return runDoctor(args[1:])
+		case "run":
+			args = args[1:]
+		}
 	}
 	return runForeground(args)
 }
@@ -43,8 +49,18 @@ func runForeground(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	listen := flags.String("listen", envOr("AI_CONTROL_LISTEN", "127.0.0.1:8788"), "HTTP listen address")
 	fixture := flags.String("fixture", os.Getenv("AI_CONTROL_FIXTURE"), "schema-v1 fixture used during migration")
+	config := flags.String("config", os.Getenv("AI_CONTROL_MACHINE_CONFIG"), "machine service configuration for foreground troubleshooting")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *config != "" && *fixture != "" {
+		return errors.New("run --config and --fixture cannot be used together")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if *config != "" {
+		return runConfigured(ctx, absolute(*config))
 	}
 
 	started := time.Now().UTC()
@@ -81,17 +97,18 @@ func runForeground(args []string) error {
 			return fmt.Errorf("initialize snapshot store: %w", err)
 		}
 		collectorLoop = agentruntime.New(snapshotStore, zCollect, ccCollect, agentruntime.DefaultConfig())
-		return serve(*listen, *fixture != "", zEnabled, ccEnabled, started, snapshotStore, collectorLoop)
+		return serve(ctx, *listen, false, zEnabled, ccEnabled, started, snapshotStore, collectorLoop)
 	}
 
 	snapshotStore, err := store.New(initial)
 	if err != nil {
 		return fmt.Errorf("initialize snapshot store: %w", err)
 	}
-	return serve(*listen, true, false, false, started, snapshotStore, nil)
+	return serve(ctx, *listen, true, false, false, started, snapshotStore, nil)
 }
 
 func serve(
+	ctx context.Context,
 	listen string,
 	fixture bool,
 	zEnabled bool,
@@ -108,8 +125,6 @@ func serve(
 		IdleTimeout:       60 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	if collectorLoop != nil {
 		collectorLoop.Start(ctx)
 	}
@@ -143,7 +158,6 @@ func serve(
 		}
 		return nil
 	case err := <-errCh:
-		stop()
 		if collectorLoop != nil {
 			collectorLoop.Wait()
 		}
