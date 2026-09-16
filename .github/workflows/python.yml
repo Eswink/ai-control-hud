@@ -7,8 +7,6 @@ on:
       - 'server/**'
       - 'tools/**'
       - 'scripts/**'
-      - 'docs/H3_FIELD_VALIDATION.md'
-      - 'docs/HUB_DEPLOYMENT.md'
       - '.github/workflows/python.yml'
   pull_request:
     paths:
@@ -16,8 +14,6 @@ on:
       - 'server/**'
       - 'tools/**'
       - 'scripts/**'
-      - 'docs/H3_FIELD_VALIDATION.md'
-      - 'docs/HUB_DEPLOYMENT.md'
       - '.github/workflows/python.yml'
   workflow_dispatch:
 
@@ -44,14 +40,11 @@ jobs:
       - name: Install editable package and dev dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Run legacy Python backend tests
+      - name: Run retained Python diagnostics/source tests
         run: python -m pytest -q
 
-      - name: Verify legacy Python backup command
-        run: ai-control-hub-backup --help
-
-      - name: Compile helper scripts
-        run: python -m py_compile scripts/g4_state_db.py scripts/backup_hub_db.py scripts/package-h3-validation.py
+      - name: Compile retained helper scripts
+        run: python -m py_compile scripts/g4_state_db.py scripts/package-h3-validation.py
 
       - name: Validate Hub deployment assets
         if: runner.os == 'Linux'

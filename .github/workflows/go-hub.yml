@@ -9,11 +9,19 @@ on:
       - 'agent/internal/events/event.go'
       - 'agent/go.mod'
       - 'agent/go.sum'
+      - 'server/hub/**'
+      - 'server/hub_app.py'
+      - 'tools/hub_backup.py'
+      - 'scripts/backup_hub_db.py'
+      - 'pyproject.toml'
       - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ci-go-only-hub.sh'
       - 'scripts/ci-hub-deployment-smoke.sh'
       - 'scripts/package-h3-validation.py'
       - 'docs/H3_FIELD_VALIDATION.md'
       - 'docs/HUB_DEPLOYMENT.md'
+      - 'docs/GO_HUB_MIGRATION.md'
+      - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-hub.yml'
   pull_request:
     paths:
@@ -23,11 +31,19 @@ on:
       - 'agent/internal/events/event.go'
       - 'agent/go.mod'
       - 'agent/go.sum'
+      - 'server/hub/**'
+      - 'server/hub_app.py'
+      - 'tools/hub_backup.py'
+      - 'scripts/backup_hub_db.py'
+      - 'pyproject.toml'
       - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ci-go-only-hub.sh'
       - 'scripts/ci-hub-deployment-smoke.sh'
       - 'scripts/package-h3-validation.py'
       - 'docs/H3_FIELD_VALIDATION.md'
       - 'docs/HUB_DEPLOYMENT.md'
+      - 'docs/GO_HUB_MIGRATION.md'
+      - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-hub.yml'
   workflow_dispatch:
 
@@ -40,6 +56,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Enforce Go-only Hub boundary
+        shell: bash
+        run: bash ./scripts/ci-go-only-hub.sh
 
       - name: Set up Go
         uses: actions/setup-go@v7
