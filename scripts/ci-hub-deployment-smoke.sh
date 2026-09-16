@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/scripts/ai-control-hub-systemd.sh"
 LAN_DOCTOR_SMOKE="$ROOT/scripts/ci-hub-lan-doctor-smoke.sh"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
 
 bash -n "$INSTALLER"
 bash -n "$LAN_DOCTOR_SMOKE"
@@ -56,6 +58,35 @@ if bash "$INSTALLER" render-unit --lan-auto --discovery-port 70000 >/dev/null 2>
   echo "invalid discovery port was accepted" >&2
   exit 1
 fi
+
+# Verify the systemd adapter derives doctor ports from the installed unit rather
+# than assuming defaults. The doctor itself is independently exercised below.
+printf '%s\n' "$unit_lan_custom" > "$TMP/lan.service"
+cat > "$TMP/fake-doctor.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$FAKE_DOCTOR_ARGS"
+EOF
+chmod +x "$TMP/fake-doctor.sh"
+AI_CONTROL_HUB_UNIT_PATH="$TMP/lan.service" \
+AI_CONTROL_HUB_DOCTOR_PATH="$TMP/fake-doctor.sh" \
+FAKE_DOCTOR_ARGS="$TMP/doctor.args" \
+  bash "$INSTALLER" lan-doctor
+
+test "$(paste -sd ' ' "$TMP/doctor.args")" = '--http-port 8787 --discovery-port 9798 --service ai-control-hub.service'
+
+printf '%s\n' "$unit_default" > "$TMP/default.service"
+if AI_CONTROL_HUB_UNIT_PATH="$TMP/default.service" \
+   AI_CONTROL_HUB_DOCTOR_PATH="$TMP/fake-doctor.sh" \
+   FAKE_DOCTOR_ARGS="$TMP/disabled.args" \
+   bash "$INSTALLER" lan-doctor >"$TMP/disabled.log" 2>&1; then
+  echo "lan-doctor accepted a unit with discovery disabled" >&2
+  exit 1
+else
+  rc=$?
+  [[ "$rc" -eq 2 ]] || { cat "$TMP/disabled.log" >&2; exit 1; }
+fi
+grep -Fq 'LAN auto-discovery is not enabled' "$TMP/disabled.log"
 
 bash "$LAN_DOCTOR_SMOKE"
 
