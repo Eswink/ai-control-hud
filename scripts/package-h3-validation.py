@@ -15,6 +15,7 @@ DEFAULT_OUTPUT = ROOT / "dist" / "ai-control-hub-h3-validation.zip"
 INCLUDE_FILES = (
     "docs/HUB_DEPLOYMENT.md",
     "docs/H3_FIELD_VALIDATION.md",
+    "docs/H3_WINDOWS_FIRST_INSTALL.md",
     "scripts/ai-control-hub-systemd.sh",
 )
 
