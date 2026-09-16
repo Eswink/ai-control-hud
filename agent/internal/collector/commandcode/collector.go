@@ -312,6 +312,26 @@ func number(value any) (float64, bool) {
 }
 
 func timestamp(value any) *time.Time {
+	// JSON decoding uses json.Number. Preserve integral epoch values before any
+	// float64 conversion so millisecond timestamps do not acquire nanosecond
+	// artifacts such as .707000017Z on large Unix values.
+	if rawNumber, ok := value.(json.Number); ok {
+		text := strings.TrimSpace(rawNumber.String())
+		if text != "" && !strings.ContainsAny(text, ".eE") {
+			if raw, err := strconv.ParseInt(text, 10, 64); err == nil && raw > 0 {
+				if raw > 10_000_000_000 {
+					parsed := time.UnixMilli(raw).UTC()
+					return &parsed
+				}
+				if raw <= 253402300799 {
+					parsed := time.Unix(raw, 0).UTC()
+					return &parsed
+				}
+				return nil
+			}
+		}
+	}
+
 	if numeric, ok := number(value); ok && numeric > 0 {
 		seconds := numeric
 		if numeric > 10_000_000_000 {
@@ -321,7 +341,7 @@ func timestamp(value any) *time.Time {
 		if whole <= 0 || whole > 253402300799 {
 			return nil
 		}
-		parsed := time.Unix(int64(whole), int64(fraction*1_000_000_000)).UTC()
+		parsed := time.Unix(int64(whole), int64(math.Round(fraction*1_000_000_000))).UTC()
 		return &parsed
 	}
 	text, ok := value.(string)
