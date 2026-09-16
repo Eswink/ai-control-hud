@@ -56,20 +56,37 @@ function Wait-AgentState {
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastError = $null
+    $lastState = $null
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
-            $state = Invoke-RestMethod -Uri "$baseUrl/api/v1/state" -Method Get -TimeoutSec 3
-            if ($state.schemaVersion -eq 1 -and
-                [string]$state.server.version -like "0.3.*-go*" -and
-                $state.zcode.health.status -eq "ok") {
-                return $state
+            $lastState = Invoke-RestMethod -Uri "$baseUrl/api/v1/state" -Method Get -TimeoutSec 3
+            if ($lastState.schemaVersion -eq 1 -and
+                [string]$lastState.server.version -like "0.3.*-go*" -and
+                $lastState.zcode.health.status -eq "ok") {
+                return $lastState
             }
         } catch {
             $lastError = $_.Exception.Message
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "G6 service did not become healthy in time. Last error: $lastError"
+
+    if ($null -ne $lastState) {
+        $diagnostic = [ordered]@{
+            serverVersion = $lastState.server.version
+            overall = $lastState.overall.status
+            zcodeHealth = $lastState.zcode.health
+            zcodeSummary = $lastState.zcode.summary
+            commandCodeHealth = $lastState.commandCode.health
+        } | ConvertTo-Json -Depth 8 -Compress
+        Write-Host "[g6-ci] last state: $diagnostic"
+    }
+    & $agent service status
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction SilentlyContinue
+    if ($null -ne $service) {
+        Write-Host "[g6-ci] SCM state=$($service.Status)"
+    }
+    throw "G6 service did not become healthy in time. Last request error: $lastError"
 }
 
 $installed = $false
