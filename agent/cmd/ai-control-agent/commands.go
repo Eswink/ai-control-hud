@@ -167,7 +167,6 @@ func serviceInstall(args []string) error {
 		return err
 	}
 	if err := winservice.Install(windowsServiceName, windowsServiceDisplayName, windowsServiceDescription, targetExecutable, resolvedConfig); err != nil {
-		_ = os.Remove(targetExecutable)
 		return err
 	}
 
@@ -365,6 +364,11 @@ func defaultServiceExecutablePath() (string, error) {
 }
 
 func copyExecutable(source, target string) error {
+	source = absolute(source)
+	target = absolute(target)
+	if strings.EqualFold(source, target) {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("create service binary directory: %w", err)
 	}
@@ -373,15 +377,18 @@ func copyExecutable(source, target string) error {
 		return fmt.Errorf("open service source executable: %w", err)
 	}
 	defer input.Close()
-	output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+
+	temporary := target + ".new"
+	_ = os.Remove(temporary)
+	output, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
 	if err != nil {
-		return fmt.Errorf("create installed service executable: %w", err)
+		return fmt.Errorf("create staged service executable: %w", err)
 	}
-	committed := false
+	staged := false
 	defer func() {
 		_ = output.Close()
-		if !committed {
-			_ = os.Remove(target)
+		if !staged {
+			_ = os.Remove(temporary)
 		}
 	}()
 	if _, err := io.Copy(output, input); err != nil {
@@ -393,7 +400,26 @@ func copyExecutable(source, target string) error {
 	if err := output.Close(); err != nil {
 		return fmt.Errorf("close service executable: %w", err)
 	}
-	committed = true
+
+	backup := target + ".bak"
+	_ = os.Remove(backup)
+	hadExisting := false
+	if _, statErr := os.Stat(target); statErr == nil {
+		if err := os.Rename(target, backup); err != nil {
+			return fmt.Errorf("stage existing service executable: %w", err)
+		}
+		hadExisting = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect existing service executable: %w", statErr)
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		if hadExisting {
+			_ = os.Rename(backup, target)
+		}
+		return fmt.Errorf("commit service executable: %w", err)
+	}
+	staged = true
+	_ = os.Remove(backup)
 	return nil
 }
 
