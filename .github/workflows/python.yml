@@ -44,10 +44,10 @@ jobs:
       - name: Install editable package and dev dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Run tests
+      - name: Run legacy Python backend tests
         run: python -m pytest -q
 
-      - name: Verify installed Hub backup command
+      - name: Verify legacy Python backup command
         run: ai-control-hub-backup --help
 
       - name: Compile helper scripts
@@ -57,18 +57,6 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: bash ./scripts/ci-hub-deployment-smoke.sh
-
-      - name: Build H3 validation bundle
-        if: runner.os == 'Linux'
-        run: python scripts/package-h3-validation.py --output dist/ai-control-hub-h3-validation.zip
-
-      - name: Upload H3 validation bundle
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v7
-        with:
-          name: ai-control-hub-h3-validation-bundle
-          path: dist/ai-control-hub-h3-validation.zip
-          if-no-files-found: error
 
       - name: Validate PowerShell syntax
         if: runner.os == 'Windows'
