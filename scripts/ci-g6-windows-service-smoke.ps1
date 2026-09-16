@@ -12,7 +12,7 @@ $root = Join-Path $env:RUNNER_TEMP "ai-control-hud-g6-service-smoke"
 $runtimeDb = Join-Path $root "runtime.sqlite"
 $taskIndexDb = Join-Path $root "tasks-index.sqlite"
 $providerConfig = Join-Path $root "provider.json"
-$machineConfig = Join-Path $root "agent.json"
+$machineConfig = Join-Path $root "state\agent.json"
 $port = 18787
 $baseUrl = "http://127.0.0.1:$port"
 
@@ -42,7 +42,7 @@ $providerJson = @'
       "enabled": true,
       "options": {
         "baseURL": "https://api.commandcode.ai/provider/v1",
-        "apiKey": "cc-ci-g6-smoke-secret"
+        "apiKey": "test-only"
       },
       "models": {}
     }
@@ -155,6 +155,9 @@ try {
 
     Write-Host "[g6-ci] deleting plaintext provider import before reinstall"
     Remove-Item -Force $providerConfig
+    if (Test-Path $providerConfig) {
+        throw "plaintext provider import still exists after deletion"
+    }
 
     Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore"
     & $agent service install `
