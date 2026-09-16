@@ -5,6 +5,8 @@ SERVICE_NAME="${AI_CONTROL_HUB_SERVICE_NAME:-ai-control-hub.service}"
 BINARY_PATH="${AI_CONTROL_HUB_BINARY_PATH:-/usr/local/lib/ai-control-hub/ai-control-hub}"
 SYSTEMCTL_BIN="${AI_CONTROL_HUB_SYSTEMCTL:-systemctl}"
 SUDO_BIN="${AI_CONTROL_HUB_SUDO:-sudo}"
+BINARY_OWNER="${AI_CONTROL_HUB_BINARY_OWNER:-root}"
+BINARY_GROUP="${AI_CONTROL_HUB_BINARY_GROUP:-root}"
 CANDIDATE=""
 
 usage() {
@@ -19,6 +21,7 @@ Transactionally replace the installed Go Hub binary while preserving:
   * firewall configuration
 
 The candidate must pass `ai-control-hub version` before service downtime.
+Production defaults keep the installed Hub binary root:root mode 0755.
 EOF
 }
 
@@ -77,7 +80,7 @@ case "$service_state" in
 esac
 
 run_root rm -f "$staged"
-run_root install -o root -g root -m 0755 "$CANDIDATE_ABS" "$staged"
+run_root install -o "$BINARY_OWNER" -g "$BINARY_GROUP" -m 0755 "$CANDIDATE_ABS" "$staged"
 sync
 
 cleanup_staged=1
