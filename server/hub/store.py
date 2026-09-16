@@ -7,6 +7,8 @@ from pathlib import Path
 
 from server.hud.models import HudState
 
+from .models import AgentEvent, HubEvent
+
 
 class HubStore:
     def __init__(self, database_path: Path) -> None:
@@ -39,6 +41,20 @@ class HubStore:
                     state_json TEXT NOT NULL,
                     FOREIGN KEY(agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    agent_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    event_json TEXT NOT NULL,
+                    FOREIGN KEY(agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_events_agent_seq
+                    ON events(agent_id, seq);
                 """
             )
 
@@ -99,6 +115,57 @@ class HubStore:
                 agent_version=agent_version,
             )
 
+    def record_events(
+        self,
+        agent_id: str,
+        sent_at: datetime,
+        events: list[AgentEvent],
+        received_at: datetime,
+    ) -> tuple[int, int]:
+        accepted = 0
+        duplicates = 0
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                # Any authenticated event delivery also proves that the agent was alive at
+                # received_at. A normal heartbeat still provides the steady-state signal.
+                self._upsert_agent(
+                    agent_id=agent_id,
+                    sent_at=sent_at,
+                    received_at=received_at,
+                    agent_version=None,
+                )
+                for event in events:
+                    cursor = self._connection.execute(
+                        """
+                        INSERT OR IGNORE INTO events(
+                            event_id,
+                            agent_id,
+                            event_type,
+                            occurred_at,
+                            received_at,
+                            event_json
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event.event_id,
+                            agent_id,
+                            event.type,
+                            event.occurred_at.isoformat(),
+                            received_at.isoformat(),
+                            event.model_dump_json(by_alias=True),
+                        ),
+                    )
+                    if cursor.rowcount == 1:
+                        accepted += 1
+                    else:
+                        duplicates += 1
+                self._connection.execute("COMMIT")
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+        return accepted, duplicates
+
     def load_state(self, agent_id: str) -> tuple[HudState, datetime] | None:
         with self._lock:
             row = self._connection.execute(
@@ -115,6 +182,32 @@ class HubStore:
         state = HudState.model_validate_json(row["state_json"])
         last_seen_at = datetime.fromisoformat(row["last_seen_at"])
         return state, last_seen_at
+
+    def list_events(self, agent_id: str, after: int, limit: int) -> list[HubEvent]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT seq, agent_id, received_at, event_json
+                FROM events
+                WHERE agent_id = ? AND seq > ?
+                ORDER BY seq ASC
+                LIMIT ?
+                """,
+                (agent_id, after, limit),
+            ).fetchall()
+
+        result: list[HubEvent] = []
+        for row in rows:
+            event = AgentEvent.model_validate_json(row["event_json"])
+            result.append(
+                HubEvent(
+                    **event.model_dump(),
+                    seq=row["seq"],
+                    agent_id=row["agent_id"],
+                    received_at=datetime.fromisoformat(row["received_at"]),
+                )
+            )
+        return result
 
     def _upsert_agent(
         self,
