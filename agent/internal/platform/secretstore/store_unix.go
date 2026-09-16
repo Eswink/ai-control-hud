@@ -74,6 +74,18 @@ func Write(path string, record Record) error {
 
 func Read(path string) (Record, error) {
 	var record Record
+	directory := filepath.Dir(path)
+	dirInfo, err := os.Stat(directory)
+	if err != nil {
+		return record, fmt.Errorf("read secret store directory: %w", err)
+	}
+	if !dirInfo.IsDir() {
+		return record, errors.New("secret store parent is not a directory")
+	}
+	if dirInfo.Mode().Perm()&0o077 != 0 {
+		return record, errors.New("secret store directory permissions are too broad")
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		return record, fmt.Errorf("read secret store: %w", err)
