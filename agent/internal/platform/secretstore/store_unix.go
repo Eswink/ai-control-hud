@@ -16,7 +16,48 @@ func Write(path string, record Record) error {
 	if err := record.Validate(); err != nil {
 		return err
 	}
-	data, err := json.Marshal(record)
+	return writeProtectedJSON(path, record)
+}
+
+func Read(path string) (Record, error) {
+	var record Record
+	if err := readProtectedJSON(path, &record); err != nil {
+		return record, err
+	}
+	if err := record.Validate(); err != nil {
+		return Record{}, err
+	}
+	return record, nil
+}
+
+func WriteHub(path string, record HubRecord) error {
+	if err := record.Validate(); err != nil {
+		return err
+	}
+	return writeProtectedJSON(path, record)
+}
+
+func ReadHub(path string) (HubRecord, error) {
+	var record HubRecord
+	if err := readProtectedJSON(path, &record); err != nil {
+		return record, err
+	}
+	if err := record.Validate(); err != nil {
+		return HubRecord{}, err
+	}
+	return record, nil
+}
+
+func Remove(path string) error {
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func writeProtectedJSON(path string, value any) error {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return errors.New("encode secret record failed")
 	}
@@ -72,50 +113,38 @@ func Write(path string, record Record) error {
 	return nil
 }
 
-func Read(path string) (Record, error) {
-	var record Record
+func readProtectedJSON(path string, target any) error {
 	directory := filepath.Dir(path)
 	dirInfo, err := os.Stat(directory)
 	if err != nil {
-		return record, fmt.Errorf("read secret store directory: %w", err)
+		return fmt.Errorf("read secret store directory: %w", err)
 	}
 	if !dirInfo.IsDir() {
-		return record, errors.New("secret store parent is not a directory")
+		return errors.New("secret store parent is not a directory")
 	}
 	if dirInfo.Mode().Perm()&0o077 != 0 {
-		return record, errors.New("secret store directory permissions are too broad")
+		return errors.New("secret store directory permissions are too broad")
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return record, fmt.Errorf("read secret store: %w", err)
+		return fmt.Errorf("read secret store: %w", err)
 	}
 	if info.IsDir() {
-		return record, errors.New("secret store path is a directory")
+		return errors.New("secret store path is a directory")
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return record, errors.New("secret store permissions are too broad")
+		return errors.New("secret store permissions are too broad")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return record, fmt.Errorf("read secret store: %w", err)
+		return fmt.Errorf("read secret store: %w", err)
 	}
 	defer zero(data)
-	if err := json.Unmarshal(data, &record); err != nil {
-		return record, errors.New("secret store payload is invalid")
+	if err := json.Unmarshal(data, target); err != nil {
+		return errors.New("secret store payload is invalid")
 	}
-	if err := record.Validate(); err != nil {
-		return Record{}, err
-	}
-	return record, nil
-}
-
-func Remove(path string) error {
-	err := os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+	return nil
 }
 
 func zero(data []byte) {
