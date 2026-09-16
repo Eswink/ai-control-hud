@@ -50,3 +50,12 @@ jobs:
       - name: Build
         run: go build ./cmd/ai-control-agent
         working-directory: agent
+
+      - name: Upload Windows shadow agent
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-agent-windows-shadow
+          path: agent/ai-control-agent.exe
+          if-no-files-found: error
+          retention-days: 14
