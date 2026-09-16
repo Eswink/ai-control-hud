@@ -42,6 +42,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$CONFIG_PATH" in
+  /*) ;;
+  *) CONFIG_PATH="$PWD/$CONFIG_PATH" ;;
+esac
+
 require_systemd() {
   command -v systemctl >/dev/null 2>&1 || { echo "systemctl is unavailable" >&2; exit 1; }
   [[ -d /run/systemd/system ]] || { echo "systemd is not the active service manager" >&2; exit 1; }
@@ -51,7 +56,11 @@ secret_from_config() {
   if ! sudo test -f "$CONFIG_PATH"; then
     return 0
   fi
-  if sudo test -x "$INSTALL_DIR/ai-control-agent"; then
+  if sudo test -x "$INSTALL_DIR/ai-control-hud"; then
+    sudo "$INSTALL_DIR/ai-control-hud" config get \
+      --config "$CONFIG_PATH" \
+      --field command-code-secret
+  elif sudo test -x "$INSTALL_DIR/ai-control-agent"; then
     sudo "$INSTALL_DIR/ai-control-agent" config get \
       --config "$CONFIG_PATH" \
       --field command-code-secret
