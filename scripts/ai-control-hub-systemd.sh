@@ -11,6 +11,10 @@ ENV_PATH="$CONFIG_DIR/hub.env"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
 
 LISTEN="127.0.0.1:8787"
+LISTEN_PROVIDED=0
+LAN_AUTO=0
+DISCOVERY_PORT=8788
+HUB_ID="central-hub"
 AGENT_ID="desktop-main"
 SOURCE=""
 TOKEN_FILE=""
@@ -21,14 +25,16 @@ PURGE_DATA=0
 usage() {
   cat <<'EOF'
 Usage:
-  ai-control-hub-systemd.sh install --source REPO_ROOT --token-file PATH [--listen HOST:PORT] [--agent-id ID] [--python PATH]
+  ai-control-hub-systemd.sh install --source REPO_ROOT --token-file PATH [--listen HOST:PORT | --lan-auto] [--discovery-port PORT] [--hub-id ID] [--agent-id ID] [--python PATH]
   ai-control-hub-systemd.sh rotate-token --token-file PATH
-  ai-control-hub-systemd.sh render-unit [--listen HOST:PORT]
+  ai-control-hub-systemd.sh render-unit [--listen HOST:PORT | --lan-auto] [--discovery-port PORT] [--hub-id ID]
   ai-control-hub-systemd.sh start|stop|restart|status
   ai-control-hub-systemd.sh remove [--purge] [--purge-data]
 
 Security defaults:
   * listen defaults to 127.0.0.1:8787
+  * --lan-auto explicitly binds 0.0.0.0:8787 and enables UDP LAN discovery on port 8788
+  * LAN discovery advertises only service metadata; it never sends the bearer token
   * the token file is imported into /etc/ai-control-hud/hub.env (0600, root-only)
   * SQLite state lives in /var/lib/ai-control-hud and is preserved on normal removal
   * token rotation never accepts a bearer token on the command line
@@ -47,7 +53,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --source) SOURCE="$2"; shift 2 ;;
     --token-file) TOKEN_FILE="$2"; shift 2 ;;
-    --listen) LISTEN="$2"; shift 2 ;;
+    --listen) LISTEN="$2"; LISTEN_PROVIDED=1; shift 2 ;;
+    --lan-auto) LAN_AUTO=1; shift ;;
+    --discovery-port) DISCOVERY_PORT="$2"; shift 2 ;;
+    --hub-id) HUB_ID="$2"; shift 2 ;;
     --agent-id) AGENT_ID="$2"; shift 2 ;;
     --python) PYTHON_BIN="$2"; shift 2 ;;
     --purge) PURGE=1; shift ;;
@@ -56,6 +65,14 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ "$LAN_AUTO" -eq 1 && "$LISTEN_PROVIDED" -eq 1 ]]; then
+  echo "--lan-auto and --listen are mutually exclusive" >&2
+  exit 2
+fi
+if [[ "$LAN_AUTO" -eq 1 ]]; then
+  LISTEN="0.0.0.0:8787"
+fi
 
 validate_listen() {
   local value="${1:-$LISTEN}"
@@ -70,10 +87,20 @@ validate_listen() {
   fi
 }
 
-validate_agent_id() {
+validate_port() {
   local value="$1"
+  local label="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+    echo "$label must be within 1..65535" >&2
+    exit 2
+  fi
+}
+
+validate_identifier() {
+  local value="$1"
+  local label="$2"
   [[ "$value" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || {
-    echo "agent id contains unsupported characters" >&2
+    echo "$label contains unsupported characters" >&2
     exit 2
   }
 }
@@ -113,11 +140,38 @@ listen_port() {
   printf '%s\n' "${LISTEN##*:}"
 }
 
+print_lan_urls() {
+  local port="$1"
+  local found=0
+  if command -v ip >/dev/null 2>&1; then
+    while read -r address; do
+      [[ -n "$address" && "$address" != 127.* ]] || continue
+      echo "[hub-systemd] LAN candidate=http://$address:$port"
+      found=1
+    done < <(ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sort -u)
+  elif command -v hostname >/dev/null 2>&1; then
+    for address in $(hostname -I 2>/dev/null || true); do
+      [[ "$address" == *.* && "$address" != 127.* ]] || continue
+      echo "[hub-systemd] LAN candidate=http://$address:$port"
+      found=1
+    done
+  fi
+  if [[ "$found" -eq 0 ]]; then
+    echo "[hub-systemd] LAN address unavailable; clients can still discover the Hub after networking is up"
+  fi
+}
+
 render_unit() {
   validate_listen "$LISTEN"
-  local host port
+  validate_port "$DISCOVERY_PORT" "--discovery-port"
+  validate_identifier "$HUB_ID" "hub id"
+  local host port discovery_enabled
   host="$(listen_host)"
   port="$(listen_port)"
+  discovery_enabled=0
+  if [[ "$LAN_AUTO" -eq 1 ]]; then
+    discovery_enabled=1
+  fi
   cat <<EOF
 [Unit]
 Description=AI Control HUD Central Hub
@@ -131,6 +185,11 @@ Group=$SERVICE_USER
 WorkingDirectory=$DATA_DIR
 EnvironmentFile=$ENV_PATH
 Environment=PYTHONUNBUFFERED=1
+Environment=HUD_HUB_ID=$HUB_ID
+Environment=HUD_HUB_DISCOVERY_ENABLED=$discovery_enabled
+Environment=HUD_HUB_DISCOVERY_PORT=$DISCOVERY_PORT
+Environment=HUD_HUB_HTTP_SCHEME=http
+Environment=HUD_HUB_HTTP_PORT=$port
 ExecStart=$VENV_DIR/bin/python -m uvicorn server.hub_app:create_production_hub_app --factory --host $host --port $port --workers 1
 Restart=on-failure
 RestartSec=5s
@@ -188,7 +247,9 @@ case "$ACTION" in
   install)
     require_systemd
     validate_listen "$LISTEN"
-    validate_agent_id "$AGENT_ID"
+    validate_port "$DISCOVERY_PORT" "--discovery-port"
+    validate_identifier "$HUB_ID" "hub id"
+    validate_identifier "$AGENT_ID" "agent id"
     [[ -n "$SOURCE" ]] || { echo "--source is required" >&2; exit 2; }
     command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "Python interpreter is unavailable: $PYTHON_BIN" >&2; exit 1; }
 
@@ -226,6 +287,10 @@ case "$ACTION" in
     sudo systemctl enable "$SERVICE_NAME"
     unset token
     echo "[hub-systemd] installed service=$SERVICE_NAME listen=$LISTEN data=$DATA_DIR"
+    if [[ "$LAN_AUTO" -eq 1 ]]; then
+      echo "[hub-systemd] LAN auto-discovery enabled udp=$DISCOVERY_PORT hub=$HUB_ID"
+      print_lan_urls "$(listen_port)"
+    fi
     echo "[hub-systemd] service is enabled but not started; run '$0 start' after network/firewall validation"
     echo "[hub-systemd] plaintext token file was not modified; delete it after end-to-end validation"
     ;;
@@ -241,7 +306,7 @@ case "$ACTION" in
       echo "Hub environment file is incomplete" >&2
       exit 1
     }
-    validate_agent_id "$agent_id"
+    validate_identifier "$agent_id" "agent id"
     [[ "$stale_after" =~ ^[0-9]+$ ]] || { unset token; echo "Hub stale threshold is invalid" >&2; exit 1; }
 
     env_tmp="$(mktemp)"
