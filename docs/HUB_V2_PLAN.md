@@ -157,32 +157,34 @@ The dedicated-HUD foreground mode remains the primary operating mode. Background
 ### H0 — Architecture freeze
 
 - [x] Record central-hub plan.
-- [ ] Update architecture/ADR docs after the first working vertical slice.
+- [x] Update architecture/ADR docs after the first working vertical slice.
 
 ### H1 — Linux hub MVP
 
-- [ ] SQLite-backed hub store.
-- [ ] authenticated snapshot ingest.
-- [ ] authenticated heartbeat ingest.
-- [ ] schema-v1 `/api/v1/state` compatibility endpoint.
-- [ ] stale projection when an agent disappears.
-- [ ] API tests.
+- [x] SQLite-backed hub store.
+- [x] authenticated snapshot ingest.
+- [x] authenticated heartbeat ingest.
+- [x] schema-v1 `/api/v1/state` compatibility endpoint.
+- [x] stale projection when an agent disappears.
+- [x] API tests.
 
-Exit criterion: a synthetic Windows snapshot can be POSTed and then read unchanged by an existing Android parser, except for server-owned time/uptime and freshness projection.
+Exit criterion met: a schema-v1 snapshot can be authenticated, persisted, read back through the Android-compatible API, survive a hub restart, and be downgraded to stale after heartbeat expiry. Python CI passes on Linux and Windows.
 
 ### H2 — Go remote uploader
 
-- [ ] uploader package with bounded HTTP timeouts.
-- [ ] upload latest `SnapshotStore` state.
-- [ ] heartbeat cadence independent of collector cadence.
-- [ ] exponential retry/backoff.
-- [ ] configuration for hub URL, agent ID, token.
-- [ ] retain local HTTP API.
+- [x] uploader package with bounded HTTP timeouts.
+- [x] upload latest `SnapshotStore` state.
+- [x] heartbeat cadence independent of collector cadence.
+- [x] exponential retry/backoff.
+- [x] configuration for hub URL, agent ID, token.
+- [x] retain local HTTP API.
 
-Exit criterion: the production Go agent can continuously refresh the hub without opening an inbound Windows port.
+Exit criterion met at code/CI level: the production Go agent can refresh the hub using outbound-only requests while retaining local collection/API behavior; Go CI, native runtime smoke, and service smoke pass across the existing platform matrix. Real CentOS/Windows end-to-end validation belongs to H3/H6.
 
 ### H3 — Android cutover
 
+- [ ] deploy the H1 hub on the 24/7 CentOS host.
+- [ ] configure the Windows agent to upload to that hub.
 - [ ] point the existing HUD at the hub.
 - [ ] show useful last-seen/offline state.
 - [ ] validate Windows shutdown while Android remains usable.
@@ -208,6 +210,7 @@ Exit criterion: the production Go agent can continuously refresh the hub without
 - [ ] CentOS systemd unit.
 - [ ] persistent data directory and backup notes.
 - [ ] private-overlay deployment guide.
+- [ ] protected Windows-service hub token storage.
 - [ ] token rotation procedure.
 - [ ] reboot/network-loss/outage tests.
 
