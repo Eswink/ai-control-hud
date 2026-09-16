@@ -6,12 +6,14 @@ on:
       - 'pyproject.toml'
       - 'server/**'
       - 'tools/**'
+      - 'scripts/**'
       - '.github/workflows/python.yml'
   pull_request:
     paths:
       - 'pyproject.toml'
       - 'server/**'
       - 'tools/**'
+      - 'scripts/**'
       - '.github/workflows/python.yml'
   workflow_dispatch:
 
@@ -40,3 +42,19 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Validate Windows launcher syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/run-windows.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
