@@ -84,7 +84,7 @@ func Start(name string) error {
 	if err := service.Start(); err != nil {
 		return fmt.Errorf("start service: %w", err)
 	}
-	return waitState(service, svc.Running, 20*time.Second)
+	return waitStableRunning(service, 20*time.Second)
 }
 
 func Stop(name string) error {
@@ -176,6 +176,32 @@ func (h *handler) Execute(_ []string, requests <-chan svc.ChangeRequest, changes
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- h.runner(ctx) }()
+
+	startup := time.NewTimer(500 * time.Millisecond)
+	select {
+	case err := <-result:
+		startup.Stop()
+		if err != nil {
+			return true, 1
+		}
+		return false, 0
+	case request := <-requests:
+		startup.Stop()
+		if request.Cmd == svc.Stop || request.Cmd == svc.Shutdown {
+			cancel()
+			select {
+			case err := <-result:
+				if err != nil {
+					return true, 1
+				}
+				return false, 0
+			case <-time.After(10 * time.Second):
+				return true, 2
+			}
+		}
+	case <-startup.C:
+	}
+
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 
 	for {
@@ -239,6 +265,31 @@ func waitState(service *mgr.Service, wanted svc.State, timeout time.Duration) er
 		time.Sleep(250 * time.Millisecond)
 	}
 	return fmt.Errorf("service did not reach %s state", stateLabel(wanted))
+}
+
+func waitStableRunning(service *mgr.Service, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	stableSince := time.Time{}
+	for time.Now().Before(deadline) {
+		status, err := service.Query()
+		if err != nil {
+			return err
+		}
+		switch status.State {
+		case svc.Running:
+			if stableSince.IsZero() {
+				stableSince = time.Now()
+			} else if time.Since(stableSince) >= 750*time.Millisecond {
+				return nil
+			}
+		case svc.Stopped:
+			return fmt.Errorf("service stopped during startup with exit code %d", status.ServiceSpecificExitCode)
+		default:
+			stableSince = time.Time{}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return errors.New("service did not reach stable running state")
 }
 
 func stateLabel(state svc.State) string {
