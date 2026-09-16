@@ -41,6 +41,7 @@ jobs:
           scripts/hub_bundle.py
           scripts/package-hub-bundle.py
           scripts/package-h3-validation.py
+          scripts/go_release_manifest.py
           scripts/ci-repository-safety.py
 
       - name: Validate Hub deployment assets
