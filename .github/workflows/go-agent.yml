@@ -1,0 +1,52 @@
+name: Go Agent CI
+
+on:
+  push:
+    paths:
+      - 'agent/**'
+      - 'server/tests/fixtures/**'
+      - 'docs/API.md'
+      - '.github/workflows/go-agent.yml'
+  pull_request:
+    paths:
+      - 'agent/**'
+      - 'server/tests/fixtures/**'
+      - 'docs/API.md'
+      - '.github/workflows/go-agent.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+
+      - name: Go version
+        run: go version
+        working-directory: agent
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: agent
+
+      - name: Test
+        run: go test ./...
+        working-directory: agent
+
+      - name: Build
+        run: go build ./cmd/ai-control-agent
+        working-directory: agent
