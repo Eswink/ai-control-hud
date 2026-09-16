@@ -620,6 +620,43 @@ public final class MainActivity extends Activity {
     }
 
     private void showOffline(Exception error) {
+        if (error instanceof StateClient.SnapshotUnavailableException) {
+            failureCount = 0;
+            lastSnapshot = null;
+            liveStatus.setText("● WAITING FOR AGENT");
+            liveStatus.setTextColor(Color.rgb(253, 214, 99));
+            serverLabel.setText(serverUrl);
+            lastUpdateText.setText("Hub online · waiting for Windows Agent snapshot");
+
+            zcodeHealth.setText("● WAITING · no Agent snapshot");
+            zcodeHealth.setTextColor(Color.rgb(253, 214, 99));
+            zcodeSummary.setText("Waiting for Windows Agent snapshot");
+            hideAllTaskRows();
+            taskEmpty.setVisibility(View.VISIBLE);
+            taskEmpty.setText("Waiting for Agent snapshot");
+            taskOverflow.setVisibility(View.GONE);
+
+            commandHealth.setText("● WAITING · no Agent snapshot");
+            commandHealth.setTextColor(Color.rgb(253, 214, 99));
+            planText.setText("Plan --");
+            creditText.setText("Credit --");
+            fiveHourLabel.setText("5H --");
+            weeklyLabel.setText("WEEK --");
+            fiveHourProgress.setProgress(0);
+            weeklyProgress.setProgress(0);
+            fiveHourProgress.setProgressTintList(ColorStateList.valueOf(Color.rgb(95, 99, 104)));
+            weeklyProgress.setProgressTintList(ColorStateList.valueOf(Color.rgb(95, 99, 104)));
+            return;
+        }
+
+        if (error instanceof StateClient.HttpStatusException) {
+            StateClient.HttpStatusException status = (StateClient.HttpStatusException) error;
+            liveStatus.setText("● SERVER ERROR");
+            liveStatus.setTextColor(Color.rgb(242, 139, 130));
+            serverLabel.setText(serverUrl + " · HTTP " + status.statusCode);
+            return;
+        }
+
         liveStatus.setText("● OFFLINE");
         liveStatus.setTextColor(Color.rgb(242, 139, 130));
         serverLabel.setText(serverUrl + "  ·  " + safeError(error));
@@ -647,6 +684,9 @@ public final class MainActivity extends Activity {
 
     private static String safeError(Exception error) {
         if (error instanceof StateSnapshot.IncompatibleSchemaException) return error.getMessage();
+        if (error instanceof StateClient.HttpStatusException) {
+            return "HTTP " + ((StateClient.HttpStatusException) error).statusCode;
+        }
         String name = error.getClass().getSimpleName();
         return name.isEmpty() ? "network error" : name;
     }
