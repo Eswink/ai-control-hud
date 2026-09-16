@@ -4,11 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/scripts/ai-control-hub-systemd.sh"
 LAN_DOCTOR_SMOKE="$ROOT/scripts/ci-hub-lan-doctor-smoke.sh"
+UPGRADE_SMOKE="$ROOT/scripts/ci-hub-upgrade-smoke.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 bash -n "$INSTALLER"
 bash -n "$LAN_DOCTOR_SMOKE"
+bash -n "$UPGRADE_SMOKE"
 
 unit_default="$(bash "$INSTALLER" render-unit)"
 grep -Fq 'ExecStart=/usr/local/lib/ai-control-hub/ai-control-hub serve --host 127.0.0.1 --port 8787' <<<"$unit_default"
@@ -89,5 +91,6 @@ fi
 grep -Fq 'LAN auto-discovery is not enabled' "$TMP/disabled.log"
 
 bash "$LAN_DOCTOR_SMOKE"
+bash "$UPGRADE_SMOKE"
 
 echo "[hub-deployment-smoke] ok"
