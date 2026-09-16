@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	apihttp "github.com/Eswink/ai-control-hud/agent/internal/api"
@@ -35,6 +36,10 @@ func run(args []string) error {
 		case "version":
 			fmt.Println(version)
 			return nil
+		case "configure":
+			return runConfigure(args[1:])
+		case "config":
+			return runConfigCommand(args[1:])
 		case "service":
 			return runServiceCommand(args[1:])
 		case "doctor":
@@ -58,7 +63,7 @@ func runForeground(args []string) error {
 		return errors.New("run --config and --fixture cannot be used together")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *config != "" {
 		return runConfigured(ctx, absolute(*config))

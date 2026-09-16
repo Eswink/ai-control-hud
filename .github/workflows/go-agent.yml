@@ -5,21 +5,35 @@ on:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ai-control-agent-systemd.sh'
+      - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ci-agent-runtime-smoke.py'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
+      - 'scripts/ci-g7-unix-service-smoke.sh'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
+      - 'docs/G7_CROSS_PLATFORM.md'
       - '.github/workflows/go-agent.yml'
   pull_request:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ai-control-agent-systemd.sh'
+      - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ci-agent-runtime-smoke.py'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
+      - 'scripts/ci-g7-unix-service-smoke.sh'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
+      - 'docs/G7_CROSS_PLATFORM.md'
       - '.github/workflows/go-agent.yml'
   workflow_dispatch:
+
+concurrency:
+  group: go-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -29,7 +43,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            platform: windows-amd64
+          - os: ubuntu-latest
+            platform: linux-amd64
+          - os: macos-15
+            platform: darwin-arm64
+          - os: macos-15-intel
+            platform: darwin-amd64
+    name: test (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -57,10 +80,38 @@ jobs:
         run: go build ./cmd/ai-control-agent
         working-directory: agent
 
+      - name: Validate Unix service scripts
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bash -n ./scripts/ai-control-agent-systemd.sh
+          bash -n ./scripts/ai-control-agent-launchd.sh
+          bash -n ./scripts/ci-g7-unix-service-smoke.sh
+
+      - name: Native runtime smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python .\scripts\ci-agent-runtime-smoke.py --agent .\agent\ai-control-agent.exe
+
+      - name: Native runtime smoke (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: python3 ./scripts/ci-agent-runtime-smoke.py --agent ./agent/ai-control-agent
+
       - name: Windows service smoke
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\scripts\ci-g6-windows-service-smoke.ps1
+
+      - name: Linux systemd + SecretStore smoke
+        if: matrix.platform == 'linux-amd64'
+        shell: bash
+        run: bash ./scripts/ci-g7-unix-service-smoke.sh
+
+      - name: macOS launchd + SecretStore smoke
+        if: matrix.platform == 'darwin-arm64'
+        shell: bash
+        run: bash ./scripts/ci-g7-unix-service-smoke.sh
 
       - name: Upload Windows agent
         if: runner.os == 'Windows'
