@@ -13,6 +13,7 @@ on:
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
+      - 'docs/G7_CROSS_PLATFORM.md'
       - '.github/workflows/go-agent.yml'
   pull_request:
     paths:
@@ -26,8 +27,13 @@ on:
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
+      - 'docs/G7_CROSS_PLATFORM.md'
       - '.github/workflows/go-agent.yml'
   workflow_dispatch:
+
+concurrency:
+  group: go-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
