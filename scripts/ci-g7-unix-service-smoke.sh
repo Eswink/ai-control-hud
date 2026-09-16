@@ -8,11 +8,10 @@ PORT=18789
 BASE_URL="http://127.0.0.1:$PORT"
 ROOT="${RUNNER_TEMP:-/tmp}/ai-control-hud-g7-service-smoke"
 SMOKE_HOME="$ROOT/home"
-PROVIDER_ROOT="$ROOT/provider"
 STATE_ROOT="$ROOT/state"
 RUNTIME_DB="$SMOKE_HOME/.zcode/cli/db/db.sqlite"
 TASK_INDEX_DB="$SMOKE_HOME/.zcode/v2/tasks-index.sqlite"
-PROVIDER_CONFIG="$PROVIDER_ROOT/provider.json"
+API_KEY_FILE="$ROOT/commandcode.key"
 CONFIG_PATH="$STATE_ROOT/agent.json"
 
 case "$(uname -s)" in
@@ -22,24 +21,10 @@ case "$(uname -s)" in
 esac
 
 rm -rf "$ROOT"
-mkdir -p "$SMOKE_HOME" "$PROVIDER_ROOT" "$STATE_ROOT"
+mkdir -p "$SMOKE_HOME" "$STATE_ROOT"
 python3 "$STATE_TOOL" init --runtime "$RUNTIME_DB" --task-index "$TASK_INDEX_DB"
-cat >"$PROVIDER_CONFIG" <<'JSON'
-{
-  "provider": {
-    "command": {
-      "name": "command",
-      "kind": "openai",
-      "enabled": true,
-      "options": {
-        "baseURL": "https://api.commandcode.ai/provider/v1",
-        "apiKey": "test-only"
-      },
-      "models": {}
-    }
-  }
-}
-JSON
+printf '%s\n' 'test-only' >"$API_KEY_FILE"
+chmod 0600 "$API_KEY_FILE"
 
 wait_state() {
   python3 - "$BASE_URL" <<'PY'
@@ -79,10 +64,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[g7-ci] install $(uname -s) service using caller-home ZCode discovery"
+echo "[g7-ci] import operator-supplied CommandCode key into protected Unix SecretStore"
+sudo "$AGENT" commandcode configure \
+  --config "$CONFIG_PATH" \
+  --api-key-file "$API_KEY_FILE"
+sudo "$AGENT" commandcode status --config "$CONFIG_PATH" | grep -Fq 'provider=command-code'
+
+echo "[g7-ci] install $(uname -s) service using caller-home ZCode discovery and existing SecretStore"
 HOME="$SMOKE_HOME" bash "$ADAPTER" install \
   --agent "$AGENT" \
-  --provider-config "$PROVIDER_CONFIG" \
   --listen "127.0.0.1:$PORT" \
   --config "$CONFIG_PATH"
 installed=1
@@ -106,6 +96,11 @@ else
 fi
 [[ "$mode" == "600" ]] || { echo "unexpected secret mode $mode" >&2; exit 1; }
 
+echo "[g7-ci] delete operator plaintext key after protected-store validation"
+rm -f "$API_KEY_FILE"
+[[ ! -e "$API_KEY_FILE" ]] || { echo "plaintext key still exists" >&2; exit 1; }
+sudo "$AGENT" commandcode status --config "$CONFIG_PATH" | grep -Fq 'provider=command-code'
+
 echo "[g7-ci] start service"
 bash "$ADAPTER" start >/dev/null
 wait_state
@@ -123,7 +118,6 @@ installed=0
 [[ -f "$CONFIG_PATH" ]] || { echo "machine config disappeared" >&2; exit 1; }
 [[ -f "$secret_path" ]] || { echo "SecretStore disappeared" >&2; exit 1; }
 
-rm -f "$PROVIDER_CONFIG"
 echo "[g7-ci] reinstall from preserved SecretStore without provider flag"
 HOME="$SMOKE_HOME" bash "$ADAPTER" install \
   --agent "$AGENT" \
@@ -139,4 +133,4 @@ bash "$ADAPTER" start >/dev/null
 wait_state
 bash "$ADAPTER" stop
 
-echo "[g7-ci] $(uname -s) service + SecretStore + home-discovery + reinstall smoke PASSED"
+echo "[g7-ci] $(uname -s) service + manual-key SecretStore + home-discovery + reinstall smoke PASSED"
