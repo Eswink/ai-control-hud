@@ -5,13 +5,19 @@ on:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ci-g6-windows-service-smoke.ps1'
+      - 'scripts/g4_state_db.py'
       - 'docs/API.md'
+      - 'docs/G6_WINDOWS_SERVICE.md'
       - '.github/workflows/go-agent.yml'
   pull_request:
     paths:
       - 'agent/**'
       - 'server/tests/fixtures/**'
+      - 'scripts/ci-g6-windows-service-smoke.ps1'
+      - 'scripts/g4_state_db.py'
       - 'docs/API.md'
+      - 'docs/G6_WINDOWS_SERVICE.md'
       - '.github/workflows/go-agent.yml'
   workflow_dispatch:
 
@@ -51,11 +57,16 @@ jobs:
         run: go build ./cmd/ai-control-agent
         working-directory: agent
 
-      - name: Upload Windows shadow agent
+      - name: Windows service smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\ci-g6-windows-service-smoke.ps1
+
+      - name: Upload Windows agent
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
-          name: ai-control-agent-windows-shadow
+          name: ai-control-agent-windows
           path: agent/ai-control-agent.exe
           if-no-files-found: error
           retention-days: 14
