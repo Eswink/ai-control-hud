@@ -4,7 +4,7 @@ set -euo pipefail
 SERVICE_NAME="${AI_CONTROL_HUB_SERVICE_NAME:-ai-control-hub.service}"
 BINARY_PATH="${AI_CONTROL_HUB_BINARY_PATH:-/usr/local/lib/ai-control-hub/ai-control-hub}"
 SYSTEMCTL_BIN="${AI_CONTROL_HUB_SYSTEMCTL:-systemctl}"
-SUDO_BIN="${AI_CONTROL_HUB_SUDO:-sudo}"
+SUDO_BIN="${AI_CONTROL_HUB_SUDO-sudo}"
 BINARY_OWNER="${AI_CONTROL_HUB_BINARY_OWNER:-root}"
 BINARY_GROUP="${AI_CONTROL_HUB_BINARY_GROUP:-root}"
 CANDIDATE=""
