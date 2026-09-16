@@ -7,7 +7,7 @@ INSTALLER="$ROOT/scripts/ai-control-hub-systemd.sh"
 bash -n "$INSTALLER"
 
 unit_default="$(bash "$INSTALLER" render-unit)"
-grep -Fq -- '--host 127.0.0.1 --port 8787' <<<"$unit_default"
+grep -Fq 'ExecStart=/usr/local/lib/ai-control-hub/ai-control-hub serve --host 127.0.0.1 --port 8787' <<<"$unit_default"
 grep -Fq 'Environment=HUD_HUB_DISCOVERY_ENABLED=0' <<<"$unit_default"
 grep -Fq 'User=ai-control-hub' <<<"$unit_default"
 grep -Fq 'EnvironmentFile=/etc/ai-control-hud/hub.env' <<<"$unit_default"
@@ -17,18 +17,22 @@ grep -Fq 'ProtectHome=true' <<<"$unit_default"
 grep -Fq 'CapabilityBoundingSet=' <<<"$unit_default"
 grep -Fq 'ReadWritePaths=/var/lib/ai-control-hud' <<<"$unit_default"
 
+if grep -Eiq 'python|uvicorn|venv' <<<"$unit_default"; then
+  echo "Go Hub unit unexpectedly depends on Python/uvicorn/venv" >&2
+  exit 1
+fi
 if grep -Fq 'HUD_HUB_AGENT_TOKEN=' <<<"$unit_default"; then
   echo "rendered unit must not contain the bearer token" >&2
   exit 1
 fi
 
 unit_overlay="$(bash "$INSTALLER" render-unit --listen 100.64.0.10:9443)"
-grep -Fq -- '--host 100.64.0.10 --port 9443' <<<"$unit_overlay"
+grep -Fq 'ExecStart=/usr/local/lib/ai-control-hub/ai-control-hub serve --host 100.64.0.10 --port 9443' <<<"$unit_overlay"
 grep -Fq 'Environment=HUD_HUB_DISCOVERY_ENABLED=0' <<<"$unit_overlay"
 grep -Fq 'Environment=HUD_HUB_HTTP_PORT=9443' <<<"$unit_overlay"
 
 unit_lan="$(bash "$INSTALLER" render-unit --lan-auto)"
-grep -Fq -- '--host 0.0.0.0 --port 8787' <<<"$unit_lan"
+grep -Fq 'ExecStart=/usr/local/lib/ai-control-hub/ai-control-hub serve --host 0.0.0.0 --port 8787' <<<"$unit_lan"
 grep -Fq 'Environment=HUD_HUB_DISCOVERY_ENABLED=1' <<<"$unit_lan"
 grep -Fq 'Environment=HUD_HUB_DISCOVERY_PORT=8788' <<<"$unit_lan"
 grep -Fq 'Environment=HUD_HUB_HTTP_PORT=8787' <<<"$unit_lan"
