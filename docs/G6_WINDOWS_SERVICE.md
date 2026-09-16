@@ -19,11 +19,13 @@ The service deliberately separates executable, trusted non-secret configuration,
 
 No API key is placed in the Windows service command line, environment, Android configuration, machine config, or logs.
 
-## Why absolute ZCode paths are persisted
+## Why absolute ZCode paths and source ACLs are persisted
 
 A Windows service normally runs as LocalSystem. `os.UserHomeDir()` in that process does not refer to the interactive developer profile, so resolving `~/.zcode/...` at service startup would select the wrong profile.
 
 `service install` therefore resolves the current interactive user's ZCode runtime and task-index paths once and persists their absolute paths in machine config. The service opens those SQLite files read-only using the same collectors already validated in G4/G5.
+
+User-profile ACLs are not assumed to grant LocalSystem access. During machine-config preparation the installer adds an explicit **read-only** LocalSystem ACE to each configured SQLite file and a read/execute inheritable ACE to its containing directory. Existing ACL entries are preserved. Directory inheritance lets future SQLite `-wal`/`-shm` sidecars remain readable without granting the service write access to ZCode data. These additive source ACLs are intentionally not removed automatically because the installer cannot safely distinguish a pre-existing SYSTEM ACE from one it added.
 
 ## Commands
 
@@ -46,19 +48,20 @@ Optional explicit ZCode paths are available if auto-discovery is not desired:
 The first install operation:
 
 1. verifies that at least one ZCode database is readable;
-2. reads the existing gitignored provider mirror once;
-3. validates that it is the official CommandCode provider and has a key;
-4. writes the provider record to DPAPI SecretStore;
-5. writes ACL-protected machine config without credentials;
-6. copies the current executable into `Program Files`;
-7. creates a Windows Defender Firewall inbound rule bound to the installed executable and configured TCP port for `Private` and `Domain` profiles only;
-8. registers `AIControlHUD` as an automatic Windows service with bounded restart recovery actions.
+2. grants LocalSystem the minimum read/traverse access required for the configured ZCode SQLite sources;
+3. reads the existing gitignored provider mirror once;
+4. validates that it is the official CommandCode provider and has a key;
+5. writes the provider record to DPAPI SecretStore;
+6. writes ACL-protected machine config without credentials;
+7. copies the current executable into `Program Files`;
+8. creates Windows Defender Firewall inbound rules bound to the installed executable and configured TCP port for `Private` and `Domain` profiles only;
+9. registers `AIControlHUD` as an automatic Windows service with bounded restart recovery actions.
 
 The installer deliberately does **not** open the `Public` firewall profile. The existing Android HUD should continue to use a trusted Private LAN or another explicitly trusted path. If a specific overlay adapter is classified as Public on the target machine, handle that adapter policy explicitly rather than globally opening the service on Public networks.
 
 The plaintext import file is **not** deleted automatically. Keep it until the final target-machine service validation is complete. After the service survives restart/boot validation and `doctor --live` succeeds, it can be removed manually.
 
-After a successful first import, reinstall no longer depends on the plaintext mirror. `service remove` preserves machine config and the DPAPI SecretStore. A subsequent `service install` reuses the protected credential when the provider import file is absent, and preserves the stored listen/ZCode paths unless explicit override flags are supplied.
+After a successful first import, reinstall no longer depends on the plaintext mirror. `service remove` preserves machine config and the DPAPI SecretStore. A subsequent `service install` reuses the protected credential when the provider import file is absent, and preserves the stored listen/ZCode paths unless explicit override flags are supplied. Windows CI exercises this remove/reinstall path with the plaintext import deleted before reinstall.
 
 Lifecycle commands:
 
@@ -70,13 +73,13 @@ Lifecycle commands:
 .\ai-control-agent.exe service remove
 ```
 
-`service remove` removes the SCM registration and the service firewall rule but keeps machine config, protected secret, and installed executable so reinstall is reversible. To remove those stored files as well:
+`service remove` removes the SCM registration and the service firewall rules but keeps machine config, protected secret, and installed executable so reinstall is reversible. To remove those stored files as well:
 
 ```powershell
 .\ai-control-agent.exe service remove --purge
 ```
 
-`--purge` intentionally removes the ability to reinstall without re-importing a credential.
+`--purge` intentionally removes the ability to reinstall without re-importing a credential. The additive LocalSystem read ACE on ZCode source paths is retained for the safety reason described above.
 
 ## Doctor
 
@@ -121,6 +124,8 @@ The platform service adapter converts SCM stop/shutdown requests into context ca
 SCM recovery is configured to restart unexpected failures after 5 seconds, 15 seconds, and 60 seconds; the failure counter resets after one day. Operator-requested stop remains a normal graceful shutdown.
 
 Windows-specific imports are isolated under `agent/internal/platform/*`. A repository architecture test enforces that direct `golang.org/x/sys/windows` imports cannot escape that boundary. Domain, store, API, collectors, and runtime remain platform-neutral.
+
+Windows CI performs a real SCM smoke test on a hosted Windows runner: it creates synthetic ZCode SQLite data, installs the service, verifies installer-context DPAPI access, starts LocalSystem, waits for ZCode `ok`, restarts, stops, removes the service while preserving machine state, deletes the plaintext provider import, reinstalls from the preserved DPAPI SecretStore, starts again, and finally purges the test service state.
 
 ## Final target-machine gate
 
