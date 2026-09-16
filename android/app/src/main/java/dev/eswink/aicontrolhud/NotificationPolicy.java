@@ -28,6 +28,10 @@ final class NotificationPolicy {
         return age >= -5 * 60 * 1000L;
     }
 
+    static boolean isTooOld(EventPage.EventItem event, long nowMillis) {
+        return event != null && nowMillis - event.occurredAtMillis > MAX_SPEECH_AGE_MS;
+    }
+
     static boolean isQuietMinute(int localMinuteOfDay) {
         int minute = Math.max(0, Math.min(24 * 60 - 1, localMinuteOfDay));
         return minute >= QUIET_START_MINUTE || minute < QUIET_END_MINUTE;
@@ -37,7 +41,7 @@ final class NotificationPolicy {
         String title = event == null || event.taskTitle == null || event.taskTitle.trim().isEmpty()
                 ? "task"
                 : event.taskTitle.trim();
-        boolean chinese = locale != null && locale.getLanguage().toLowerCase(Locale.US).startsWith("zh");
+        boolean chinese = isChinese(locale);
 
         if (event != null && "task.failed".equals(event.type)) {
             return chinese ? "任务「" + title + "」执行失败。" : "Task " + title + " failed.";
@@ -45,8 +49,19 @@ final class NotificationPolicy {
         return chinese ? "任务「" + title + "」已完成。" : "Task " + title + " completed.";
     }
 
+    static String offlineSummaryText(Locale locale) {
+        return isChinese(locale)
+                ? "离线期间有较早的任务状态更新，已同步到控制面板。"
+                : "Older task updates were received while the HUD was offline.";
+    }
+
     static String testSpeech(Locale locale) {
-        boolean chinese = locale != null && locale.getLanguage().toLowerCase(Locale.US).startsWith("zh");
-        return chinese ? "AI 控制面板语音提醒正常。" : "AI Control HUD voice notifications are working.";
+        return isChinese(locale)
+                ? "AI 控制面板语音提醒正常。"
+                : "AI Control HUD voice notifications are working.";
+    }
+
+    private static boolean isChinese(Locale locale) {
+        return locale != null && locale.getLanguage().toLowerCase(Locale.US).startsWith("zh");
     }
 }
