@@ -226,12 +226,16 @@ Exit criterion met at code/CI level: a new installation baselines silently, subs
 
 ### H6 — Deployment hardening
 
-- [ ] CentOS systemd unit.
-- [ ] persistent data directory and backup notes.
-- [ ] private-overlay deployment guide.
-- [ ] protected Windows-service hub token storage.
-- [ ] token rotation procedure.
-- [ ] reboot/network-loss/outage tests.
+- [x] hardened CentOS/RHEL-family systemd unit and installer.
+- [x] persistent data/config/secret directory separation.
+- [x] online-safe SQLite backup/restore tooling and notes.
+- [x] private LAN/Tailscale/WireGuard deployment guide.
+- [x] protected Windows-service Hub credential using platform SecretStore/DPAPI.
+- [x] token-file import and server/agent token rotation procedure without bearer tokens in CLI arguments.
+- [x] deployment/backup/secret regression tests and CI smoke coverage.
+- [ ] execute real CentOS reboot, private-network outage, Windows shutdown, Android reconnect, speaker/TTS, and backup/restore acceptance drills.
+
+Exit criterion met at code/CI level: the Hub can be installed as an unprivileged hardened systemd service with a root-only token environment and persistent SQLite data; live WAL databases can be backed up through SQLite's backup API and restored by the documented maintenance procedure; Windows can store/rotate Hub credentials using its existing DPAPI-backed SecretStore while retaining environment-variable fallback for development; and packaging/deployment/SecretStore regressions are covered in CI. The remaining unchecked acceptance drills require the actual CentOS/Windows/Android environment and are tracked with H3 rather than treated as simulated CI success.
 
 ## Non-goals for this migration
 
