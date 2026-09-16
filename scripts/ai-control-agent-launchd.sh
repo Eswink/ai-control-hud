@@ -45,6 +45,7 @@ done
 require_launchd() {
   [[ "$(uname -s)" == "Darwin" ]] || { echo "launchd adapter requires macOS" >&2; exit 1; }
   command -v launchctl >/dev/null 2>&1 || { echo "launchctl is unavailable" >&2; exit 1; }
+  command -v plutil >/dev/null 2>&1 || { echo "plutil is unavailable" >&2; exit 1; }
 }
 
 loaded() {
@@ -55,14 +56,31 @@ secret_from_config() {
   if ! sudo test -f "$CONFIG_PATH"; then
     return 0
   fi
-  sudo python3 - "$CONFIG_PATH" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    value = json.load(handle).get("commandCodeSecret", "")
-if value:
-    print(value)
-PY
+  if sudo test -x "$INSTALL_DIR/ai-control-agent"; then
+    sudo "$INSTALL_DIR/ai-control-agent" config get \
+      --config "$CONFIG_PATH" \
+      --field command-code-secret
+  else
+    printf '%s\n' "$(dirname "$CONFIG_PATH")/commandcode.dpapi"
+  fi
+}
+
+write_plist() {
+  local output="$1"
+  rm -f "$output"
+  plutil -create xml1 "$output"
+  plutil -insert Label -string "$LABEL" "$output"
+  plutil -insert ProgramArguments -array "$output"
+  plutil -insert ProgramArguments.0 -string "$INSTALL_DIR/ai-control-agent" "$output"
+  plutil -insert ProgramArguments.1 -string run "$output"
+  plutil -insert ProgramArguments.2 -string --config "$output"
+  plutil -insert ProgramArguments.3 -string "$CONFIG_PATH" "$output"
+  plutil -insert RunAtLoad -bool true "$output"
+  plutil -insert KeepAlive -dictionary "$output"
+  plutil -insert KeepAlive.SuccessfulExit -bool false "$output"
+  plutil -insert ProcessType -string Background "$output"
+  plutil -insert ThrottleInterval -integer 5 "$output"
+  plutil -lint "$output" >/dev/null
 }
 
 case "$ACTION" in
@@ -91,22 +109,7 @@ case "$ACTION" in
 
     plist_tmp="$(mktemp)"
     trap 'rm -f "$plist_tmp"' EXIT
-    python3 - "$plist_tmp" "$INSTALL_DIR/ai-control-agent" "$CONFIG_PATH" "$LABEL" <<'PY'
-import plistlib
-import sys
-
-output, agent, config, label = sys.argv[1:]
-payload = {
-    "Label": label,
-    "ProgramArguments": [agent, "run", "--config", config],
-    "RunAtLoad": True,
-    "KeepAlive": {"SuccessfulExit": False},
-    "ProcessType": "Background",
-    "ThrottleInterval": 5,
-}
-with open(output, "wb") as handle:
-    plistlib.dump(payload, handle, fmt=plistlib.FMT_XML, sort_keys=True)
-PY
+    write_plist "$plist_tmp"
     sudo install -m 0644 "$plist_tmp" "$PLIST_PATH"
     sudo plutil -lint "$PLIST_PATH"
     echo "[launchd] installed label=$LABEL config=$CONFIG_PATH"
