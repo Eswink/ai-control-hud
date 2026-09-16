@@ -11,6 +11,11 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - 'agent/**'
+      - 'scripts/package-agent-release.py'
+      - '.github/workflows/go-release.yml'
 
 permissions:
   contents: write
@@ -59,12 +64,13 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
           REF_NAME: ${{ github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="$INPUT_VERSION"
-          else
-            version="${REF_NAME#v}"
-          fi
+          case "${{ github.event_name }}" in
+            workflow_dispatch) version="$INPUT_VERSION" ;;
+            pull_request) version="0.0.0-pr.$PR_NUMBER" ;;
+            *) version="${REF_NAME#v}" ;;
+          esac
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release version: $version" >&2
             exit 1
@@ -129,12 +135,13 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
           REF_NAME: ${{ github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="$INPUT_VERSION"
-          else
-            version="${REF_NAME#v}"
-          fi
+          case "${{ github.event_name }}" in
+            workflow_dispatch) version="$INPUT_VERSION" ;;
+            pull_request) version="0.0.0-pr.$PR_NUMBER" ;;
+            *) version="${REF_NAME#v}" ;;
+          esac
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Download target artifacts
@@ -152,10 +159,13 @@ jobs:
           for checksum in *.sha256; do
             sha256sum -c "$checksum"
           done
-          sha256sum *.zip *.tar.gz 2>/dev/null | LC_ALL=C sort > SHA256SUMS
+          find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
 
       - name: Attest release archives and manifest
+        if: github.event_name != 'pull_request'
         uses: actions/attest@v4.2.2
         with:
           subject-path: |
