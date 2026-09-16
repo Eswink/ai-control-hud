@@ -11,8 +11,11 @@ import (
 	"time"
 
 	apihttp "github.com/Eswink/ai-control-hud/agent/internal/api"
+	"github.com/Eswink/ai-control-hud/agent/internal/collector/commandcode"
+	"github.com/Eswink/ai-control-hud/agent/internal/collector/zcode"
 	"github.com/Eswink/ai-control-hud/agent/internal/domain"
 	"github.com/Eswink/ai-control-hud/agent/internal/mock"
+	agentruntime "github.com/Eswink/ai-control-hud/agent/internal/runtime"
 	"github.com/Eswink/ai-control-hud/agent/internal/store"
 )
 
@@ -45,23 +48,61 @@ func runForeground(args []string) error {
 	}
 
 	started := time.Now().UTC()
-	state := disabledState(started)
+	var (
+		initial       domain.HudState
+		collectorLoop *agentruntime.Runtime
+		zEnabled      bool
+		ccEnabled     bool
+	)
+
 	if *fixture != "" {
 		loaded, err := mock.LoadFixture(*fixture)
 		if err != nil {
 			return err
 		}
-		state = loaded
+		initial = loaded
+	} else {
+		zCollector, foundZCode := zcode.NewFromEnvironment()
+		ccCollector, foundCommandCode := commandcode.NewFromEnvironment()
+		zEnabled, ccEnabled = foundZCode, foundCommandCode
+		initial = agentruntime.InitialState(started, version, zEnabled, ccEnabled)
+
+		var zCollect agentruntime.ZCodeCollectFunc
+		if zCollector != nil {
+			zCollect = zCollector.Collect
+		}
+		var ccCollect agentruntime.CommandCodeCollectFunc
+		if ccCollector != nil {
+			ccCollect = ccCollector.Collect
+		}
+
+		snapshotStore, err := store.New(initial)
+		if err != nil {
+			return fmt.Errorf("initialize snapshot store: %w", err)
+		}
+		collectorLoop = agentruntime.New(snapshotStore, zCollect, ccCollect, agentruntime.DefaultConfig())
+		return serve(*listen, *fixture != "", zEnabled, ccEnabled, started, snapshotStore, collectorLoop)
 	}
 
-	snapshotStore, err := store.New(state)
+	snapshotStore, err := store.New(initial)
 	if err != nil {
 		return fmt.Errorf("initialize snapshot store: %w", err)
 	}
+	return serve(*listen, true, false, false, started, snapshotStore, nil)
+}
 
+func serve(
+	listen string,
+	fixture bool,
+	zEnabled bool,
+	ccEnabled bool,
+	started time.Time,
+	snapshotStore *store.SnapshotStore,
+	collectorLoop *agentruntime.Runtime,
+) error {
 	apiServer := apihttp.New(snapshotStore, version, started)
 	httpServer := &http.Server{
-		Addr:              *listen,
+		Addr:              listen,
 		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -69,10 +110,20 @@ func runForeground(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if collectorLoop != nil {
+		collectorLoop.Start(ctx)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		fmt.Printf("[agent] listen=http://%s fixture=%t schema=%d\n", *listen, *fixture != "", domain.SchemaVersion)
+		fmt.Printf(
+			"[agent] listen=http://%s schema=%d fixture=%t zcode=%s commandCode=%s\n",
+			listen,
+			domain.SchemaVersion,
+			fixture,
+			enabledLabel(zEnabled),
+			enabledLabel(ccEnabled),
+		)
 		errCh <- httpServer.ListenAndServe()
 	}()
 
@@ -83,12 +134,19 @@ func runForeground(args []string) error {
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shutdown HTTP server: %w", err)
 		}
+		if collectorLoop != nil {
+			collectorLoop.Wait()
+		}
 		err := <-errCh
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 		return nil
 	case err := <-errCh:
+		stop()
+		if collectorLoop != nil {
+			collectorLoop.Wait()
+		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
@@ -96,32 +154,11 @@ func runForeground(args []string) error {
 	}
 }
 
-func disabledState(now time.Time) domain.HudState {
-	zMessage := "Go ZCode collector is not configured yet"
-	ccMessage := "Go CommandCode collector is not configured yet"
-	return domain.HudState{
-		SchemaVersion: domain.SchemaVersion,
-		Server: domain.ServerInfo{
-			Version:       version,
-			Time:          now,
-			UptimeSeconds: 0,
-		},
-		Overall: domain.OverallStatus{Status: domain.OverallDegraded},
-		ZCode: domain.ZCodeState{
-			Health: domain.SourceHealth{
-				Status:     domain.SourceDisabled,
-				ObservedAt: now,
-				Message:    &zMessage,
-			},
-		},
-		CommandCode: domain.CommandCodeState{
-			Health: domain.SourceHealth{
-				Status:     domain.SourceDisabled,
-				ObservedAt: now,
-				Message:    &ccMessage,
-			},
-		},
+func enabledLabel(enabled bool) string {
+	if enabled {
+		return "enabled"
 	}
+	return "disabled"
 }
 
 func envOr(name, fallback string) string {
