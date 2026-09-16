@@ -25,6 +25,23 @@ final class StateClient {
         }
     }
 
+    EventPage fetchEvents(String baseUrl, long after, int limit) throws Exception {
+        if (after < 0) throw new IllegalArgumentException("event cursor must be non-negative");
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("event page limit must be 1..100");
+
+        HttpURLConnection connection = open(
+                baseUrl + "/api/v1/events?after=" + after + "&limit=" + limit
+        );
+        try {
+            int code = connection.getResponseCode();
+            if (code != HttpURLConnection.HTTP_OK) throw new IOException("events HTTP " + code);
+            EventPage page = EventPage.parse(new JSONObject(readAll(connection.getInputStream())));
+            return page.validateForRequest(after);
+        } finally {
+            connection.disconnect();
+        }
+    }
+
     void checkHealth(String baseUrl) throws Exception {
         HttpURLConnection connection = open(baseUrl + "/api/v1/health");
         try {
