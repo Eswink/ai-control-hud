@@ -91,5 +91,6 @@ class HubEvent(AgentEvent):
 
 
 class EventPage(ApiModel):
+    schema_version: Literal[1] = 1
     events: list[HubEvent]
     next_after: int = Field(ge=0)
