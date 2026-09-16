@@ -139,7 +139,53 @@ try {
         throw "service status after stop is $($service.Status)"
     }
 
-    Write-Host "[g6-ci] Windows SCM + DPAPI smoke PASSED"
+    Write-Host "[g6-ci] removing service while preserving machine state"
+    & $agent service remove --config $machineConfig
+    if ($LASTEXITCODE -ne 0) {
+        throw "service remove failed with exit code $LASTEXITCODE"
+    }
+    $installed = $false
+    if (-not (Test-Path $machineConfig)) {
+        throw "machine config was unexpectedly removed"
+    }
+    $machineState = Get-Content $machineConfig -Raw | ConvertFrom-Json
+    if (-not (Test-Path $machineState.commandCodeSecret)) {
+        throw "DPAPI SecretStore was unexpectedly removed"
+    }
+
+    Write-Host "[g6-ci] deleting plaintext provider import before reinstall"
+    Remove-Item -Force $providerConfig
+
+    Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore"
+    & $agent service install `
+        --config $machineConfig `
+        --provider-config $providerConfig
+    if ($LASTEXITCODE -ne 0) {
+        throw "service reinstall without plaintext provider failed with exit code $LASTEXITCODE"
+    }
+    $installed = $true
+
+    & $agent doctor --config $machineConfig
+    if ($LASTEXITCODE -ne 0) {
+        throw "doctor after reinstall failed with exit code $LASTEXITCODE"
+    }
+
+    & $agent service start
+    if ($LASTEXITCODE -ne 0) {
+        throw "service start after reinstall failed with exit code $LASTEXITCODE"
+    }
+    $state = Wait-AgentState
+    if ($state.zcode.summary.running -ne 1) {
+        throw "unexpected ZCode state after reinstall"
+    }
+
+    Write-Host "[g6-ci] stopping reinstalled service"
+    & $agent service stop
+    if ($LASTEXITCODE -ne 0) {
+        throw "service stop after reinstall failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host "[g6-ci] Windows SCM + DPAPI + reinstall smoke PASSED"
 } finally {
     if ($installed) {
         try {
