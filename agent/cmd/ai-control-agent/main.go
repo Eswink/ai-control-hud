@@ -36,6 +36,8 @@ func run(args []string) error {
 		case "version":
 			fmt.Println(version)
 			return nil
+		case "configure":
+			return runConfigure(args[1:])
 		case "service":
 			return runServiceCommand(args[1:])
 		case "doctor":
