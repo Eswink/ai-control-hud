@@ -56,11 +56,7 @@ secret_from_config() {
   if ! sudo test -f "$CONFIG_PATH"; then
     return 0
   fi
-  if sudo test -x "$INSTALL_DIR/ai-control-hud"; then
-    sudo "$INSTALL_DIR/ai-control-hud" config get \
-      --config "$CONFIG_PATH" \
-      --field command-code-secret
-  elif sudo test -x "$INSTALL_DIR/ai-control-agent"; then
+  if sudo test -x "$INSTALL_DIR/ai-control-agent"; then
     sudo "$INSTALL_DIR/ai-control-agent" config get \
       --config "$CONFIG_PATH" \
       --field command-code-secret
