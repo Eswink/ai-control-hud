@@ -5,7 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/url"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,6 +82,11 @@ func serviceInstall(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if info, statusErr := winservice.Status(windowsServiceName); statusErr == nil && info.Installed {
+		return errors.New("AI Control Agent service is already installed; remove it before reinstalling")
+	} else if statusErr != nil && !errors.Is(statusErr, winservice.ErrUnsupported) {
+		return statusErr
+	}
 
 	resolvedRuntime, resolvedTaskIndex, err := zcode.ResolvedPaths()
 	if err != nil {
@@ -118,18 +123,28 @@ func serviceInstall(args []string) error {
 		return err
 	}
 
-	executable, err := os.Executable()
+	sourceExecutable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve agent executable: %w", err)
 	}
-	executable = absolute(executable)
-	if err := winservice.Install(windowsServiceName, windowsServiceDisplayName, windowsServiceDescription, executable, resolvedConfig); err != nil {
+	targetExecutable, err := defaultServiceExecutablePath()
+	if err != nil {
+		return err
+	}
+	if err := copyExecutable(absolute(sourceExecutable), targetExecutable); err != nil {
+		_ = os.Remove(resolvedConfig)
+		_ = secretstore.Remove(secretPath)
+		return err
+	}
+	if err := winservice.Install(windowsServiceName, windowsServiceDisplayName, windowsServiceDescription, targetExecutable, resolvedConfig); err != nil {
+		_ = os.Remove(targetExecutable)
 		_ = os.Remove(resolvedConfig)
 		_ = secretstore.Remove(secretPath)
 		return err
 	}
 
 	fmt.Printf("[service] installed name=%s start=automatic\n", windowsServiceName)
+	fmt.Printf("[service] executable=%s\n", targetExecutable)
 	fmt.Printf("[service] config=%s\n", resolvedConfig)
 	fmt.Printf("[service] zcode-runtime=%s\n", resolvedRuntime)
 	fmt.Printf("[service] zcode-task-index=%s\n", resolvedTaskIndex)
@@ -140,7 +155,7 @@ func serviceInstall(args []string) error {
 
 func serviceRemove(args []string) error {
 	flags := flag.NewFlagSet("service remove", flag.ContinueOnError)
-	purge := flags.Bool("purge", false, "also delete machine config and protected secret")
+	purge := flags.Bool("purge", false, "also delete installed binary, machine config, and protected secret")
 	defaultConfig, err := machineconfig.DefaultPath()
 	if err != nil {
 		return err
@@ -163,7 +178,10 @@ func serviceRemove(args []string) error {
 			_ = secretstore.Remove(secretPath)
 		}
 		_ = os.Remove(resolvedConfig)
-		fmt.Println("[service] machine config and protected secret purged")
+		if executable, executableErr := defaultServiceExecutablePath(); executableErr == nil {
+			_ = os.Remove(executable)
+		}
+		fmt.Println("[service] installed binary, machine config, and protected secret purged")
 	}
 	return nil
 }
@@ -306,6 +324,47 @@ func defaultProviderConfigPath() string {
 	return filepath.Join(".local", "commandcode-provider.json")
 }
 
+func defaultServiceExecutablePath() (string, error) {
+	programFiles := strings.TrimSpace(os.Getenv("ProgramFiles"))
+	if programFiles == "" {
+		return "", errors.New("ProgramFiles is unavailable")
+	}
+	return filepath.Join(programFiles, "AI Control HUD", "ai-control-agent.exe"), nil
+}
+
+func copyExecutable(source, target string) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("create service binary directory: %w", err)
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("open service source executable: %w", err)
+	}
+	defer input.Close()
+	output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	if err != nil {
+		return fmt.Errorf("create installed service executable: %w", err)
+	}
+	committed := false
+	defer func() {
+		_ = output.Close()
+		if !committed {
+			_ = os.Remove(target)
+		}
+	}()
+	if _, err := io.Copy(output, input); err != nil {
+		return fmt.Errorf("copy service executable: %w", err)
+	}
+	if err := output.Sync(); err != nil {
+		return fmt.Errorf("flush service executable: %w", err)
+	}
+	if err := output.Close(); err != nil {
+		return fmt.Errorf("close service executable: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 func doctorFailure(check string, err error) error {
 	fmt.Printf("[doctor] %s=error\n", check)
 	return fmt.Errorf("doctor: %s failed: %w", check, err)
@@ -329,12 +388,4 @@ func absolute(path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(result)
-}
-
-func safeHost(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
 }
