@@ -36,12 +36,15 @@ BANNED_SUFFIXES = (
 )
 
 BANNED_SEGMENTS = {".local"}
-PRIVATE_KEY_MARKERS = (
-    b"-----BEGIN PRIVATE KEY-----",
-    b"-----BEGIN RSA PRIVATE KEY-----",
-    b"-----BEGIN EC PRIVATE KEY-----",
-    b"-----BEGIN OPENSSH PRIVATE KEY-----",
-)
+
+
+def private_key_markers() -> tuple[bytes, ...]:
+    prefix = "-----BEGIN "
+    suffix = " PRIVATE KEY-----"
+    return tuple(
+        (prefix + kind + suffix).encode("ascii")
+        for kind in ("", "RSA", "EC", "OPENSSH")
+    )
 
 
 def tracked_paths(repo: Path) -> list[str]:
@@ -78,6 +81,7 @@ def path_findings(paths: Iterable[str]) -> list[str]:
 
 def private_key_findings(repo: Path, paths: Iterable[str]) -> list[str]:
     findings: list[str] = []
+    markers = private_key_markers()
     for raw in paths:
         path = repo / raw
         if not path.is_file():
@@ -86,7 +90,7 @@ def private_key_findings(repo: Path, paths: Iterable[str]) -> list[str]:
             data = path.read_bytes()
         except OSError:
             continue
-        for marker in PRIVATE_KEY_MARKERS:
+        for marker in markers:
             if marker in data:
                 findings.append(f"tracked private-key material: {raw}")
                 break
