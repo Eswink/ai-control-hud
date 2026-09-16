@@ -5,7 +5,7 @@ LABEL="com.aicontrolhud.agent"
 INSTALL_DIR="/usr/local/lib/ai-control-hud"
 CONFIG_PATH="/Library/Application Support/AI Control HUD/agent.json"
 PLIST_PATH="/Library/LaunchDaemons/${LABEL}.plist"
-LISTEN="0.0.0.0:8787"
+LISTEN=""
 AGENT=""
 PROVIDER_CONFIG=""
 RUNTIME_DB=""
@@ -70,10 +70,20 @@ case "$ACTION" in
     require_launchd
     [[ -n "$AGENT" && -f "$AGENT" ]] || { echo "--agent must point to the agent binary" >&2; exit 2; }
     agent_abs="$(cd "$(dirname "$AGENT")" && pwd)/$(basename "$AGENT")"
+    existing_config=0
+    if sudo test -f "$CONFIG_PATH"; then
+      existing_config=1
+    fi
+
     sudo install -d -m 0755 "$INSTALL_DIR"
     sudo install -m 0755 "$agent_abs" "$INSTALL_DIR/ai-control-agent"
 
-    configure=(sudo "$INSTALL_DIR/ai-control-agent" configure --config "$CONFIG_PATH" --listen "$LISTEN")
+    configure=(sudo "$INSTALL_DIR/ai-control-agent" configure --config "$CONFIG_PATH")
+    if [[ -n "$LISTEN" ]]; then
+      configure+=(--listen "$LISTEN")
+    elif [[ "$existing_config" -eq 0 ]]; then
+      configure+=(--listen "0.0.0.0:8787")
+    fi
     [[ -n "$PROVIDER_CONFIG" ]] && configure+=(--provider-config "$PROVIDER_CONFIG")
     [[ -n "$RUNTIME_DB" ]] && configure+=(--runtime-db "$RUNTIME_DB")
     [[ -n "$TASK_INDEX_DB" ]] && configure+=(--task-index-db "$TASK_INDEX_DB")
