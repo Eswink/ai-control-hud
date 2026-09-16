@@ -82,4 +82,7 @@ android {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    // Android provides org.json at runtime; the JVM implementation is test-only
+    // so local unit tests can execute the production StateSnapshot parser.
+    testImplementation 'org.json:json:20240303'
 }
