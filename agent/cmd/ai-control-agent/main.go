@@ -38,6 +38,8 @@ func run(args []string) error {
 			return nil
 		case "configure":
 			return runConfigure(args[1:])
+		case "config":
+			return runConfigCommand(args[1:])
 		case "service":
 			return runServiceCommand(args[1:])
 		case "doctor":
