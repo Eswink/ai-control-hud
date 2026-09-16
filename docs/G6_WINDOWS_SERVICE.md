@@ -51,7 +51,10 @@ The first install operation:
 4. writes the provider record to DPAPI SecretStore;
 5. writes ACL-protected machine config without credentials;
 6. copies the current executable into `Program Files`;
-7. registers `AIControlHUD` as an automatic Windows service with bounded restart recovery actions.
+7. creates a Windows Defender Firewall inbound rule bound to the installed executable and configured TCP port for `Private` and `Domain` profiles only;
+8. registers `AIControlHUD` as an automatic Windows service with bounded restart recovery actions.
+
+The installer deliberately does **not** open the `Public` firewall profile. The existing Android HUD should continue to use a trusted Private LAN or another explicitly trusted path. If a specific overlay adapter is classified as Public on the target machine, handle that adapter policy explicitly rather than globally opening the service on Public networks.
 
 The plaintext import file is **not** deleted automatically. Keep it until the final target-machine service validation is complete. After the service survives restart/boot validation and `doctor --live` succeeds, it can be removed manually.
 
@@ -67,7 +70,7 @@ Lifecycle commands:
 .\ai-control-agent.exe service remove
 ```
 
-`service remove` keeps machine config, protected secret, and installed executable so reinstall is reversible. To remove those files as well:
+`service remove` removes the SCM registration and the service firewall rule but keeps machine config, protected secret, and installed executable so reinstall is reversible. To remove those stored files as well:
 
 ```powershell
 .\ai-control-agent.exe service remove --purge
@@ -127,8 +130,11 @@ Code/CI completion does not close G6. The final gate is intentionally performed 
 2. run `doctor --live`;
 3. stop the current foreground Go process;
 4. start the service and verify local `/api/v1/state` is LIVE;
-5. verify the existing Android HUD reconnects unchanged;
-6. restart the service and verify Android reconnects;
-7. reboot Windows and verify the service starts automatically without an interactive shell;
-8. only then remove the old plaintext `.local/commandcode-provider.json` if desired;
-9. run `service remove`, reinstall without the plaintext mirror, and start again to prove reversibility.
+5. run `scripts/verify-g6-service.ps1` and retain `.local/g6-service.json`;
+6. verify the existing Android HUD reconnects unchanged;
+7. restart the service and verify Android reconnects;
+8. reboot Windows and verify the service starts automatically without an interactive shell;
+9. only then remove the old plaintext `.local/commandcode-provider.json` if desired;
+10. run `service remove`, reinstall without the plaintext mirror, and start again to prove reversibility.
+
+The verifier checks the SCM service state, `doctor --live`, Go 0.3 server identity, schema v1, overall LIVE, ZCode OK, and CommandCode OK. Android, reboot, and reinstall checks remain explicit because they require the real target environment.
