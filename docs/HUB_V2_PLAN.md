@@ -47,7 +47,7 @@ Android will eventually point to the Linux hub instead of directly to Windows. T
 
 ### 6. Local notification policy stays on Android
 
-The server records semantic events such as `task.completed`; Android decides whether to speak, vibrate, or remain silent. Quiet hours are local device configuration. Default quiet hours will be 23:00–08:00.
+The server records semantic events such as `task.completed`; Android decides whether to speak, vibrate, or remain silent. Quiet hours are local device configuration. Default quiet hours are 23:00–08:00.
 
 ### 7. Private networking first
 
@@ -149,10 +149,12 @@ Initial policy:
 
 - task completed: voice enabled by default outside quiet hours;
 - task failed: voice enabled by default outside quiet hours;
+- completed/failed voice preferences are independently configurable on-device;
 - agent offline: visual only by default;
 - quota warnings: visual only by default;
-- events older than the notification-age threshold are not spoken individually;
-- default quiet hours: 23:00–08:00;
+- events older than 10 minutes are not spoken individually;
+- older catch-up pages produce one summary after the client reaches the event high-water mark;
+- default quiet hours: 23:00–08:00, configurable on/off locally;
 - TextToSpeech is performed locally on Android.
 
 The dedicated-HUD foreground mode remains the primary operating mode. Background delivery mechanisms such as FCM are explicitly deferred until required by real device behavior.
@@ -209,15 +211,18 @@ Exit criterion met at code/CI level: task terminal transitions survive agent res
 
 ### H5 — Android voice notifications
 
-- [ ] event client/parser with schema compatibility handling.
-- [ ] first-run event baseline from `latestSeq`.
-- [ ] persistent event cursor.
-- [ ] TextToSpeech integration.
-- [ ] user voice enable/disable preference.
-- [ ] default 23:00–08:00 quiet hours.
-- [ ] notification-age suppression for offline catch-up.
-- [ ] TTS package-visibility manifest declaration.
-- [ ] Android policy tests and CI build.
+- [x] event client/parser with schema compatibility handling.
+- [x] first-run event baseline from `latestSeq`.
+- [x] persistent event cursor bound to the configured hub URL.
+- [x] silent cursor rebase when the hub event database is reset.
+- [x] TextToSpeech integration.
+- [x] independent completed/failed voice preferences.
+- [x] default 23:00–08:00 quiet hours with local enable/disable control.
+- [x] 10-minute notification-age suppression plus one offline catch-up summary.
+- [x] TTS package-visibility manifest declaration.
+- [x] Android policy/cursor/time tests and CI build.
+
+Exit criterion met at code/CI level: a new installation baselines silently, subsequent task events advance a persisted cursor, current completion/failure events can be spoken locally according to per-event preferences and quiet hours, old catch-up events are summarized instead of replayed individually, and event-feed failures do not mark the state dashboard offline. Android `lintDebug`, JVM unit tests, debug APK assembly, and artifact upload pass in CI. Real speaker/TTS-engine behavior remains a device-level H3/H6 validation item.
 
 ### H6 — Deployment hardening
 
