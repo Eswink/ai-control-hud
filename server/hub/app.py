@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -19,6 +20,7 @@ from server.hud.models import (
 )
 
 from .config import HubConfig
+from .discovery import DiscoveryAnnouncement, HubDiscoveryProtocol
 from .models import (
     AgentEventBatch,
     AgentHeartbeat,
@@ -46,9 +48,26 @@ def create_hub_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        discovery_transport: asyncio.DatagramTransport | None = None
+        if config.discovery_enabled:
+            loop = asyncio.get_running_loop()
+            announcement = DiscoveryAnnouncement(
+                hub_id=config.hub_id,
+                scheme=config.http_scheme,
+                http_port=config.http_port,
+                hub_version=HUB_VERSION,
+            )
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: HubDiscoveryProtocol(announcement),
+                local_addr=("0.0.0.0", config.discovery_port),
+            )
+            if isinstance(transport, asyncio.DatagramTransport):
+                discovery_transport = transport
         try:
             yield
         finally:
+            if discovery_transport is not None:
+                discovery_transport.close()
             if owns_store:
                 hub_store.close()
 
