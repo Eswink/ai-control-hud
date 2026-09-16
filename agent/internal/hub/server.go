@@ -46,6 +46,7 @@ func NewServer(config Config, store *Store, version string, now func() time.Time
 		startedAt: now().UTC(),
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/discovery", s.handleDiscovery)
 	mux.HandleFunc("/api/v1/agent/state", s.handleAgentState)
 	mux.HandleFunc("/api/v1/agent/heartbeat", s.handleAgentHeartbeat)
 	mux.HandleFunc("/api/v1/agent/events", s.handleAgentEvents)
@@ -58,6 +59,25 @@ func NewServer(config Config, store *Store, version string, now func() time.Time
 
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+func (s *Server) discoveryAnnouncement() DiscoveryAnnouncement {
+	return DiscoveryAnnouncement{
+		Service:       DiscoveryServiceName,
+		SchemaVersion: DiscoverySchemaVersion,
+		HubID:         s.config.HubID,
+		Scheme:        s.config.HTTPScheme,
+		HTTPPort:      s.config.HTTPPort,
+		HubVersion:    strings.TrimSpace(s.version),
+	}
+}
+
+func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.discoveryAnnouncement())
 }
 
 func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
@@ -282,9 +302,6 @@ func staleHealth(health domain.SourceHealth, observedAt time.Time, message strin
 
 func decodeRequest(r *http.Request, target any) error {
 	decoder := json.NewDecoder(io.LimitReader(r.Body, maxRequestBody))
-	// Match the original Pydantic/FastAPI protocol behavior: unknown fields are
-	// ignored so a newer Agent may add optional fields without breaking an older
-	// Hub. Required fields and semantic invariants are still checked by Validate.
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
