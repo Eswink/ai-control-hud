@@ -19,7 +19,7 @@ Windows development machine              24/7 CentOS server                  And
 
 The production path is Go end-to-end on Windows and CentOS. The Android application remains native Java/XML.
 
-The earlier Python/FastAPI Hub implementation remains in the repository temporarily as a protocol/parity reference while the Go Hub completes real-device cutover. New CentOS deployments should use the prebuilt `ai-control-hub` Go binary; they do not require Python, pip, a virtual environment, or a Go compiler.
+The earlier Python/FastAPI Central Hub was retired after the Go Hub passed CI/parity gates and the core CentOS/Windows/Android production path was accepted on real devices. The standalone `ai-control-hub` Go binary is now the only Central Hub runtime maintained by the repository. Retained Python code is limited to legacy local diagnostics/source-verification tooling and is not a Central Hub deployment path.
 
 ## Working capabilities
 
@@ -212,7 +212,7 @@ Realtime Goal mode is read from `~/.zcode/cli/db/db.sqlite` using verified sessi
 
 ### CommandCode
 
-The Windows Agent calls the verified CommandCode billing source and normalizes plan/credit/5-hour/weekly state. Authentication, network, and schema failures remain explicit source errors/stale state rather than fabricated zero values.
+The Windows Agent calls the verified CommandCode billing source and normalizes plan/credit/5-hour/weekly state. Authentication, network, and schema failures remain explicit source errors/stale state rather than fabricated zero values. CommandCode API keys are operator-supplied and remain on Windows; the project does not auto-retrieve them.
 
 ## Technology constraints
 
@@ -229,6 +229,7 @@ The Windows Agent calls the verified CommandCode billing source and normalizes p
 - standalone Go binary;
 - pure-Go SQLite;
 - no runtime Python dependency;
+- no alternate Python Hub implementation;
 - no vendor credentials;
 - no Redis/PostgreSQL/message broker until a measured requirement exists.
 
@@ -243,20 +244,19 @@ The Windows Agent calls the verified CommandCode billing source and normalizes p
 
 - Go Agent vet/test/build on Windows/Linux/macOS;
 - dedicated Go Hub reproducible static Linux build + runtime/systemd/package smoke;
+- Go-only Hub boundary guard preventing retired Python Hub paths from returning;
 - Android lint/unit/APK CI;
-- temporary Python Linux/Windows parity/reference tests until Go Hub field cutover is accepted.
+- retained Python diagnostics/source-verification tests on Linux/Windows.
 
 ## Project docs
 
 - [`docs/HUB_V2_PLAN.md`](docs/HUB_V2_PLAN.md) — active Central Hub roadmap
-- [`docs/GO_HUB_MIGRATION.md`](docs/GO_HUB_MIGRATION.md) — Go runtime migration/cutover contract
+- [`docs/GO_HUB_MIGRATION.md`](docs/GO_HUB_MIGRATION.md) — completed Go migration and Python-Hub retirement record
 - [`docs/HUB_DEPLOYMENT.md`](docs/HUB_DEPLOYMENT.md) — Go Hub deployment/runbook
-- [`docs/H3_FIELD_VALIDATION.md`](docs/H3_FIELD_VALIDATION.md) — real-device acceptance checklist
+- [`docs/H3_FIELD_VALIDATION.md`](docs/H3_FIELD_VALIDATION.md) — real-device acceptance record/checklist
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/DECISIONS.md`](docs/DECISIONS.md)
 - [`docs/API.md`](docs/API.md)
 - [`docs/G6_WINDOWS_SERVICE.md`](docs/G6_WINDOWS_SERVICE.md)
 - [`docs/ANDROID_IMPLEMENTATION.md`](docs/ANDROID_IMPLEMENTATION.md)
 - [`docs/DEVICE_TEST.md`](docs/DEVICE_TEST.md)
-- [`docs/sources/ZCODE.md`](docs/sources/ZCODE.md)
-- [`docs/sources/COMMANDCODE.md`](docs/sources/COMMANDCODE.md)

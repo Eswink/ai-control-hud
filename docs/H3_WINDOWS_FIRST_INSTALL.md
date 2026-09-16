@@ -1,6 +1,6 @@
 # H3 Windows first-install gate
 
-Use this gate before `service restart` during real-device validation. A fresh Windows machine may have a protected Hub credential but no `AIControlHUD` SCM service yet.
+Use this gate before `service restart` during real-device validation or a fresh Windows deployment. A machine may have a protected Hub credential but no `AIControlHUD` SCM service yet.
 
 ## 1. Confirm Hub discovery
 
@@ -24,7 +24,7 @@ This proves Hub discovery only. It does **not** prove the Agent service is insta
 .\ai-control-agent.exe service status
 ```
 
-If it reports `installed=true`, use `service restart` and continue with the normal H3 checklist.
+If it reports `installed=true`, use `service restart` and continue with the normal deployment checks.
 
 If it reports:
 
@@ -36,16 +36,18 @@ this is a first-install path. Do not call `service restart` yet.
 
 ## 3. First service installation
 
-The installer auto-resolves the interactive user's standard ZCode databases and persists their absolute paths for LocalSystem. On first install it also needs a CommandCode provider credential. If a valid Windows DPAPI CommandCode SecretStore already exists, it is reused; otherwise provide the existing gitignored provider import file explicitly.
+The installer auto-resolves the interactive user's standard ZCode databases and persists their absolute paths for LocalSystem. On first install it also needs a CommandCode provider credential.
 
-Typical first install:
+CommandCode API keys are **operator-supplied only**. The project must not try to discover, scrape, recover, or auto-retrieve a real CommandCode key from accounts, files, applications, or external services. If the old provider-import file was deleted, create a new local import file yourself using a key you enter/provide directly.
+
+If a valid Windows DPAPI CommandCode SecretStore already exists, it is reused. Otherwise provide the operator-created gitignored provider import file explicitly:
 
 ```powershell
 .\ai-control-agent.exe service install `
   --provider-config "C:\path\to\ai-control-hud\.local\commandcode-provider.json"
 ```
 
-Do not paste the provider JSON or its API key into test reports.
+Do not paste the provider JSON or its API key into test reports, chat, screenshots, or GitHub.
 
 If ZCode is not in the standard user-profile location, supply absolute paths:
 
@@ -56,7 +58,7 @@ If ZCode is not in the standard user-profile location, supply absolute paths:
   --task-index-db "$env:USERPROFILE\.zcode\v2\tasks-index.sqlite"
 ```
 
-A successful install reports the installed executable, machine config, resolved ZCode paths, and whether the DPAPI CommandCode SecretStore was imported or reused.
+A successful install reports the installed executable, machine config, resolved ZCode paths, and whether the DPAPI CommandCode SecretStore was imported or reused. It must not print the API key.
 
 ## 4. Validate configuration, then start
 
@@ -86,4 +88,6 @@ Before the first Windows upload the Hub intentionally returns HTTP 503 for `/api
 
 ## 5. Android interpretation
 
-If Android has discovered the Hub but the Hub still has no primary-agent snapshot, the current client may render the dashboard as offline because `/api/v1/state` returns HTTP 503. During H3 treat this as "Hub reachable, waiting for first Agent snapshot" when Hub `/api/v1/health` is 200 and Windows service is not yet uploading.
+If Android has discovered the Hub but the Hub still has no primary-agent snapshot, the current client may render the dashboard as offline because `/api/v1/state` returns HTTP 503. Interpret this as "Hub reachable, waiting for first Agent snapshot" when Hub `/api/v1/health` is 200 and Windows service is not yet uploading.
+
+A follow-up Android UX iteration tracks making that distinction explicit in the UI instead of collapsing both cases into `offline`.

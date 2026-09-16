@@ -2,9 +2,9 @@
 
 Status: deployment guide for Central Hub V2 on CentOS/RHEL-family hosts.
 
-The production Hub runtime is a standalone Go binary named `ai-control-hub`. The CentOS host does **not** need Python, pip, virtualenv, or a Go compiler. CI produces a statically linked Linux/amd64 binary and packages it with the systemd installer and field-validation docs.
+The production Hub runtime is a standalone Go binary named `ai-control-hub`. The CentOS host does **not** need Python, pip, virtualenv, or a Go compiler. CI produces a statically linked Linux/amd64 binary and packages it with the systemd installer and deployment docs.
 
-The previous Python/FastAPI Hub remains in the repository temporarily as a parity/reference implementation. Do not deploy the Python runtime for new H3 validation.
+The former Python/FastAPI Central Hub was retired after the core Go production path passed real-device acceptance. It is no longer a supported runtime or backup path in this repository.
 
 ## 1. Architecture and security model
 
@@ -18,6 +18,7 @@ ZCode / CommandCode -> Go Agent  -------------------->  Go ai-control-hub  <----
 - Windows remains the only machine that reads ZCode and CommandCode sources.
 - Windows initiates outbound Hub uploads; the Hub never polls Windows.
 - Vendor credentials never leave Windows.
+- CommandCode API keys are supplied manually by the operator and are never auto-retrieved by the project.
 - Agent ingest uses a separate randomly generated bearer token.
 - Android never receives the ingest token.
 - Automatic LAN discovery advertises only service metadata; no credential or HUD state is included.
@@ -48,6 +49,8 @@ This explicitly enables:
 - UDP discovery on `0.0.0.0:8788`;
 - clients using stable identities `auto://lan` and `http://auto.lan`.
 
+Ensure the trusted LAN firewall permits **TCP 8787** and **UDP 8788**. A missing UDP 8788 rule makes both Windows and Android auto-discovery fail even while the Hub itself is healthy.
+
 The physical DHCP address may currently be `192.168.101.103`, but that address must not be stored as the logical auto-mode identity.
 
 ### Manual fallback
@@ -62,7 +65,7 @@ For routed VLANs, AP client isolation, or a network that blocks broadcast:
 
 Without `--lan-auto` or `--listen`, the installer renders loopback-only `127.0.0.1:8787`.
 
-## 4. Obtain the validation bundle
+## 4. Obtain the deployment bundle
 
 Use the CI artifact named:
 
@@ -70,7 +73,9 @@ Use the CI artifact named:
 ai-control-hub-h3-validation-bundle
 ```
 
-The extracted bundle contains the prebuilt Linux binary, installer, docs, build metadata, and checksums. Verify before installation:
+The historical artifact name still contains `H3`; the bundle itself is the normal Go Hub deployment bundle. It contains the prebuilt Linux binary, installer, docs, build metadata, and checksums.
+
+Verify before installation:
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -145,9 +150,11 @@ Check direct HTTP through the currently observed LAN IP:
 curl -fsS http://<CURRENT_HUB_IP>:8787/api/v1/health
 ```
 
-## 7. Migration from an already installed Python Hub
+Before the Windows Agent uploads its first snapshot, `/api/v1/health` is expected to report source errors and `/api/v1/state` is expected to return HTTP 503. That means “Hub is running but has no agent snapshot yet,” not “Hub process is down.”
 
-The Go implementation intentionally preserves the Python Hub SQLite tables:
+## 7. Migration from an older Python Hub installation
+
+The Go implementation preserves the original Central Hub SQLite tables:
 
 ```text
 agents
@@ -162,16 +169,16 @@ Default database path remains:
 /var/lib/ai-control-hud/hub.sqlite3
 ```
 
-Therefore an existing Python Hub database is reused in place. The Go installer:
+Therefore an existing database from an older Python deployment can be reused in place. The Go installer:
 
 1. stops the current `ai-control-hub.service`;
 2. preserves `/var/lib/ai-control-hud`;
 3. installs the Go binary;
-4. removes only the legacy `/usr/local/lib/ai-control-hub/venv`;
+4. removes only the legacy `/usr/local/lib/ai-control-hub/venv` if present;
 5. replaces the unit with the Go `ExecStart`;
 6. leaves the existing database intact.
 
-Before a production migration, create a backup. Do not delete the database merely to switch runtimes.
+The repository no longer ships the old Python Hub runtime. Rollback should use a previously retained deployment artifact/database backup rather than recreating the retired Python service from current source.
 
 ## 8. Configure Windows auto-discovery
 
@@ -192,14 +199,37 @@ Expected status includes the logical URL and current physical resolution:
 url=auto://lan resolved=http://192.168.101.103:8787 hub=dorm-hub
 ```
 
-Restart the service:
+Then check whether the Windows SCM service already exists:
 
 ```powershell
-.\ai-control-agent.exe service restart
 .\ai-control-agent.exe service status
 ```
 
-When `/api/v1/state` becomes fresh, delete the temporary plaintext token file from Windows and CentOS.
+If it reports `installed=false`, perform the first-time installation described in `docs/H3_WINDOWS_FIRST_INSTALL.md`. The CommandCode key must be entered/provided by the operator; do not attempt to auto-retrieve it.
+
+After installation:
+
+```powershell
+.\ai-control-agent.exe doctor --live
+.\ai-control-agent.exe service start
+```
+
+If the service is already installed, restart it instead:
+
+```powershell
+.\ai-control-agent.exe service restart
+```
+
+Verify:
+
+```powershell
+.\ai-control-agent.exe service status
+curl.exe http://127.0.0.1:8787/api/v1/state
+```
+
+Then on CentOS verify `/api/v1/state` changes from the expected pre-upload 503 to HTTP 200 with the uploaded schema-v1 snapshot.
+
+After the end-to-end path is proven, delete temporary plaintext Hub-token/provider-import files. Keep the DPAPI SecretStore records and `/etc/ai-control-hud/hub.env`.
 
 ## 9. Android
 
@@ -227,7 +257,7 @@ sudo journalctl -u ai-control-hub.service --since today
 /usr/local/lib/ai-control-hub/ai-control-hub version
 ```
 
-Do not include `hub.env`, bearer tokens, or complete process environments in diagnostics.
+Do not include `hub.env`, bearer tokens, CommandCode keys, DPAPI blobs, or complete process environments in diagnostics.
 
 ## 11. Online backup — Go only
 
@@ -257,6 +287,8 @@ The command:
 - fsyncs and atomically publishes the file.
 
 Success prints `integrity=ok`.
+
+There is no Python backup command in the supported path.
 
 ## 12. Restore
 
@@ -292,51 +324,13 @@ On Windows:
 
 The Agent durable outbox tolerates the brief 401 transition. Delete both temporary plaintext token files after confirming fresh state/event delivery.
 
-## 14. DHCP/address-change validation
+## 14. Optional operational drills
 
-When safe, change the CentOS LAN address without changing client configuration.
+The core real-device cutover was accepted on 2026-09-17. The operator explicitly chose not to block further development on the remaining disaster-recovery drills below. They remain useful operational exercises but are recorded as `NOT RUN`, not product failures:
 
-Expected:
+- Hub/network outage with durable-event catch-up;
+- CentOS reboot/autostart persistence;
+- DHCP address change and rediscovery;
+- live backup/restore drill.
 
-- Windows upload fails against the old IP, re-discovers UDP 8788, and resumes on the new IP;
-- `hub status` shows the new `resolved=` address;
-- Android re-discovers and updates its displayed `AUTO · http://...` label;
-- event cursor remains continuous because the logical identity did not change.
-
-## 15. Reboot validation
-
-```bash
-sudo reboot
-```
-
-After the host returns:
-
-```bash
-systemctl is-enabled ai-control-hub.service
-systemctl is-active ai-control-hub.service
-/usr/local/lib/ai-control-hub/ai-control-hub version
-```
-
-The database must persist and clients must resume without manual IP editing.
-
-## 16. Removal
-
-Remove only the systemd registration while preserving app/config/data:
-
-```bash
-bash scripts/ai-control-hub-systemd.sh remove
-```
-
-Remove app/config but retain SQLite state:
-
-```bash
-bash scripts/ai-control-hub-systemd.sh remove --purge
-```
-
-Permanently remove all Hub state:
-
-```bash
-bash scripts/ai-control-hub-systemd.sh remove --purge --purge-data
-```
-
-`--purge-data` is destructive and requires `--purge` explicitly.
+The implementation and CI coverage for these behaviors remain in place.
