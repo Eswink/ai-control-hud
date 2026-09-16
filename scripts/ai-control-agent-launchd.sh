@@ -51,6 +51,20 @@ loaded() {
   sudo launchctl print "system/$LABEL" >/dev/null 2>&1
 }
 
+secret_from_config() {
+  if ! sudo test -f "$CONFIG_PATH"; then
+    return 0
+  fi
+  sudo python3 - "$CONFIG_PATH" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle).get("commandCodeSecret", "")
+if value:
+    print(value)
+PY
+}
+
 case "$ACTION" in
   install)
     require_launchd
@@ -119,14 +133,17 @@ PY
     ;;
   remove)
     require_launchd
+    secret_path="$(secret_from_config || true)"
     if loaded; then
       sudo launchctl bootout "system/$LABEL" || true
     fi
     sudo rm -f "$PLIST_PATH"
     if [[ "$PURGE" -eq 1 ]]; then
+      [[ -z "$secret_path" ]] || sudo rm -f "$secret_path"
+      sudo rm -f "$CONFIG_PATH"
+      sudo rmdir "$(dirname "$CONFIG_PATH")" 2>/dev/null || true
       sudo rm -f "$INSTALL_DIR/ai-control-agent"
       sudo rmdir "$INSTALL_DIR" 2>/dev/null || true
-      sudo rm -rf "$(dirname "$CONFIG_PATH")"
       echo "[launchd] removed and purged"
     else
       echo "[launchd] removed; config/SecretStore and installed binary preserved"
