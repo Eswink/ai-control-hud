@@ -25,15 +25,17 @@ Windows development machine              24/7 CentOS server                  And
 
 1. **Collection stays local.** ZCode and CommandCode credentials/data sources remain on Windows.
 2. **Windows pushes.** The Hub never polls Windows; heartbeat age is the machine-offline signal.
-3. **Local diagnostics remain.** The Go Agent keeps local `/api/v1/state` and `/api/v1/health`.
+3. **Local diagnostics remain.** The Go Agent keeps local `/api/v1/state`, `/api/v1/health`, and sanitized `/api/v1/diagnostics`.
 4. **Snapshots and events remain separate.** Snapshot state is replaceable; task terminal events are durable and cursor-consumed.
 5. **CentOS is Android authority.** Android reads state/events from the Hub, not directly from Windows.
 6. **Notification policy is local.** Android owns TTS preferences, quiet hours, and old-event suppression.
 7. **Private networking first.** Trusted LAN/Tailscale/WireGuard are supported; public exposure is not the default model.
 8. **Discovery locates but does not authenticate.** UDP discovery contains no bearer token or vendor credential.
 9. **Stable logical identities survive DHCP.** Windows stores `auto://lan`; Android stores `http://auto.lan`.
-10. **One Central Hub runtime.** After H9, the repository maintains only the standalone Go Hub; the Python/FastAPI Central Hub is retired.
+10. **One Central Hub runtime.** The repository maintains only the standalone Go Hub; the Python/FastAPI Central Hub is retired.
 11. **CommandCode keys are operator supplied.** The project does not auto-retrieve real CommandCode API keys.
+12. **Operational diagnostics are metadata-only.** Diagnostics must not expose paths, provider URLs, raw errors, task content, tokens, API keys, or SecretStore contents.
+13. **Versioned discovery evidence is explicit.** Consumers accept only documented discovery-report versions and never infer a schema from fields.
 
 ## Hub protocol
 
@@ -56,7 +58,15 @@ GET /api/v1/health
 GET /api/v1/events?after=<seq>&limit=<1..100>
 ```
 
-`/api/v1/state` remains schema-v1 compatible. Before the first Windows snapshot it returns HTTP 503 while `/api/v1/health` can still return 200; this means the Hub is reachable but has no primary-agent state yet.
+`/api/v1/state` remains schema-v1 compatible. Before the first Windows snapshot it returns HTTP 503 while `/api/v1/health` can still return 200. Android classifies that as **WAITING FOR AGENT**, not transport offline.
+
+### Agent local diagnostics
+
+```text
+GET /api/v1/diagnostics
+```
+
+Diagnostics has its own `diagnosticsVersion=1`; it reports fixed adapter/status/age/schema metadata and is not part of the Android or Hub-ingest contract.
 
 ### Stale projection
 
@@ -221,23 +231,65 @@ Remaining optional field disaster-recovery drills are documented under H3 as `NO
 - [x] binary-only deployment bundle.
 - [x] real CentOS/Windows/Android core cutover accepted.
 
-H8 intentionally kept the Python Hub temporarily so runtime introduction and runtime retirement were reviewable separately.
-
 ### H9 — Go-only Hub cleanup
 
-- [x] remove `server/hub/` Python Central Hub package.
-- [x] remove Python Hub entrypoint and Hub-specific API/events/discovery tests.
-- [x] remove Python Hub backup helper/console entrypoint.
-- [x] retain Python local diagnostics/source-verification tooling that is not a Central Hub runtime.
-- [x] add Go-only Hub CI guard preventing retired paths from returning.
-- [x] update deployment/migration docs for a single authoritative Hub runtime.
-- [ ] fresh H9 PR CI green on the final head.
+- [x] remove Python Central Hub runtime/entrypoint/tests/backup path.
+- [x] retain non-Hub Python diagnostics/source-verification tooling.
+- [x] add Go-only Hub CI guard.
+- [x] update deployment/migration docs for one authoritative Hub runtime.
+- [x] fresh PR CI green (Go Hub CI #19, Python CI #216).
 
-Exit criterion: repository and deployment docs expose one supported Central Hub runtime (`ai-control-hub` Go binary), with the old Python Hub represented only as migration history.
+### H10 — Android connection-state clarity
 
-## Next product work after H9
+- [x] classify Hub `/state` HTTP 503 as `WAITING FOR AGENT`.
+- [x] distinguish HTTP server errors from transport `OFFLINE`.
+- [x] do not invalidate `auto.lan` discovery after a valid HTTP response.
+- [x] clear old in-memory snapshot values while waiting for first Agent snapshot.
+- [x] JVM tests cover HTTP/rediscovery classification.
+- [x] Android lint/unit/APK CI #41 green.
 
-Field testing exposed one Android UX ambiguity worth fixing next: when the Hub is reachable (`/health` 200) but no primary-agent snapshot exists (`/state` 503), the Android dashboard currently collapses that state into `offline`. A follow-up iteration should distinguish **Hub reachable / waiting for Agent** from **Hub unreachable** without changing schema-v1.
+### H11 — Sanitized source diagnostics
+
+- [x] add Agent `GET /api/v1/diagnostics` with independent version 1.
+- [x] expose fixed adapter kind, enabled/status, observed/last-success ages, and schema-support classification.
+- [x] omit paths, provider URLs, raw source messages, task data, usage payloads, tokens, API keys, and SecretStore contents.
+- [x] API test injects a private path into source error state and proves it is absent from diagnostics JSON.
+- [x] native diagnostics smoke passes on Windows/Linux/macOS arm64/macOS amd64.
+- [x] Go Agent CI #282, Go Hub CI #21, Go Agent Release #46, Python CI #218 green.
+
+### H12 — Discovery report version compatibility
+
+- [x] add strict `tools.discovery_report` loader.
+- [x] explicitly support discovery report versions 1 and 2.
+- [x] normalize v1 into safe v2-era optional defaults without mutating source evidence or rewriting its source version.
+- [x] reject missing/non-integer versions and unknown future v3+ instead of guessing fields.
+- [x] assert generator `REPORT_VERSION` matches the consumer current version so a generator-only bump fails CI.
+- [x] document v1/v2 history, future bump policy, privacy invariants, and separate provider-discovery contract.
+- [x] Python CI #221 green.
+
+## Current stacked PRs
+
+- H1/H2: PR #63 `feature/central-hub-v2`
+- H4: PR #64 `feature/durable-events-v2`
+- H5: PR #65 `feature/android-event-tts-v2`
+- H6: PR #66 `feature/deployment-hardening-v2`
+- H7: PR #67 `feature/lan-hub-discovery-v2`
+- H8: PR #68 `feature/go-hub-v2`
+- H9: PR #69 `feature/go-only-hub-v2`
+- H10: PR #70 `feature/android-hub-waiting-state-v2`
+- H11: PR #71 `feature/source-diagnostics-v2`
+- H12: PR #72 `feature/discovery-report-versioning-v2`
+
+All remain open/unmerged until explicitly requested otherwise.
+
+## Next product work
+
+The remaining backlog should be chosen conservatively:
+
+- #19 already has activity/duration/addition/deletion data, but token/tool summaries remain; do not introduce speculative cross-database joins without evidence.
+- #10 contains release/performance/device gates; the operator has explicitly ended further real-device acceptance for the current sequence.
+- #27 branch cleanup should wait until the stacked PRs are actually merged.
+- #46 Windows service work is implemented and field-accepted but remains open until its implementation stack is merged.
 
 ## Non-goals
 
@@ -249,15 +301,17 @@ Field testing exposed one Android UX ambiguity worth fixing next: when the Hub i
 - multi-user RBAC;
 - heavyweight message brokers;
 - exactly-once delivery;
+- speculative cross-database enrichment without verified identifiers;
 - rewriting working collectors without a measured need.
 
 ## Engineering rules
 
 1. schema-v1 Android compatibility must not silently break.
 2. source failures/offline states must never be represented as valid empty or zero data.
-3. no token, API key, raw auth payload, or private log is stored in Git.
+3. no token, API key, raw auth payload, private path, or private log is stored in Git or exposed in diagnostics.
 4. new network loops require bounded timeouts and cancellation.
 5. every protocol change adds tests before the next layer is introduced.
 6. local diagnostics remain usable when the Hub is unreachable.
 7. discovery is a private-network convenience layer, never authentication.
 8. Central Hub behavior has one production implementation: Go.
+9. versioned diagnostic/discovery consumers reject unsupported future schemas explicitly rather than guessing.
