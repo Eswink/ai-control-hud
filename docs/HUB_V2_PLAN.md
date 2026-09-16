@@ -17,7 +17,7 @@ Windows development machine              24/7 CentOS server                  And
 │ ai-control-agent (Go) ───┼────────────►│ agent heartbeat            ├──────►│ event cursor         │
 │          │               │             │ durable event log          │       │ local TTS policy     │
 │          ├ local API     │             │ SQLite                     │       │ quiet hours          │
-│          └ upload/outbox │             │                            │       │                      │
+│          └ upload/outbox │             │ LAN discovery (optional)   │       │                      │
 └──────────────────────────┘             └────────────────────────────┘       └──────────────────────┘
 ```
 
@@ -43,7 +43,7 @@ An event answers "what happened?" and is durable and ordered. Task completion/fa
 
 ### 5. CentOS is the Android authority
 
-Android will eventually point to the Linux hub instead of directly to Windows. The public Android state payload remains schema-v1 while the hub migration is in progress.
+Android points to the Linux Hub instead of directly to Windows. The public Android state payload remains schema-v1 during this migration.
 
 ### 6. Local notification policy stays on Android
 
@@ -52,6 +52,12 @@ The server records semantic events such as `task.completed`; Android decides whe
 ### 7. Private networking first
 
 The intended deployment is trusted LAN / Tailscale / WireGuard. Agent ingestion uses a bearer token. Direct public exposure is not part of this milestone.
+
+### 8. LAN discovery identifies location, not authority
+
+For a trusted single-Hub LAN, clients may discover the Hub with UDP broadcast. Discovery advertises only service metadata and an HTTP port. The actual URL is built from the responder source IP, so DHCP changes do not require configuration edits.
+
+The bearer token remains the authority for Agent ingestion and is never present in discovery packets. Android has no ingestion token. Manual fixed-address configuration remains available when broadcast is blocked or the deployment spans routed subnets.
 
 ## Hub protocol — phase 1
 
@@ -100,11 +106,41 @@ The hub serves the latest accepted canonical snapshot. If the agent heartbeat is
 
 The event feed is independently schema-versioned. It exposes `nextAfter` for page consumption and `latestSeq` as the current high-water mark so a newly installed Android client can establish a silent baseline without replaying historical completions.
 
+## LAN discovery protocol — phase 4
+
+Default ports in LAN-auto mode:
+
+```text
+TCP 8787   Hub HTTP API
+UDP 8788   Hub discovery
+```
+
+A client broadcasts:
+
+```text
+AI_CONTROL_HUD_DISCOVER_V1
+```
+
+Hub replies unicast with schema-v1 JSON containing only:
+
+```json
+{
+  "service": "ai-control-hud",
+  "schemaVersion": 1,
+  "hubId": "dorm-hub",
+  "scheme": "http",
+  "httpPort": 8787,
+  "hubVersion": "..."
+}
+```
+
+The client uses the UDP responder source address plus `httpPort` as the current physical Hub URL. It does not trust or require an advertised IP string.
+
+Windows stores `auto://lan` in the protected Hub record. Android stores `http://auto.lan` as a stable internal identity. Both cache the resolved physical URL and rediscover after network failure, so DHCP changes do not reset Android's event cursor or require token reconfiguration.
+
 ## Persistence
 
 The Linux server uses SQLite.
-
-Tables:
 
 ```text
 agents
@@ -145,8 +181,6 @@ The first trustworthy snapshot seen by a new outbox establishes only a baseline.
 
 ## Android notification policy — phase 3
 
-Initial policy:
-
 - task completed: voice enabled by default outside quiet hours;
 - task failed: voice enabled by default outside quiet hours;
 - completed/failed voice preferences are independently configurable on-device;
@@ -157,7 +191,7 @@ Initial policy:
 - default quiet hours: 23:00–08:00, configurable on/off locally;
 - TextToSpeech is performed locally on Android.
 
-The dedicated-HUD foreground mode remains the primary operating mode. Background delivery mechanisms such as FCM are explicitly deferred until required by real device behavior.
+The dedicated-HUD foreground mode remains the primary operating mode. Background delivery mechanisms such as FCM are deferred until required by real device behavior.
 
 ## Iteration roadmap
 
@@ -188,13 +222,15 @@ Exit criterion met: a schema-v1 snapshot can be authenticated, persisted, read b
 
 Exit criterion met at code/CI level: the production Go agent can refresh the hub using outbound-only requests while retaining local collection/API behavior; Go CI, native runtime smoke, and service smoke pass across the existing platform matrix. Real CentOS/Windows end-to-end validation belongs to H3/H6.
 
-### H3 — Android cutover
+### H3 — Real-device cutover
 
-- [ ] deploy the H1/H4 hub on the 24/7 CentOS host.
-- [ ] configure the Windows agent to upload to that hub.
-- [ ] point the existing HUD at the hub.
-- [ ] show useful last-seen/offline state.
+- [ ] deploy the Hub on the 24/7 CentOS host.
+- [ ] configure the Windows agent against the real Hub.
+- [ ] cut Android over to the Hub.
+- [ ] validate useful last-seen/offline state.
 - [ ] validate Windows shutdown while Android remains usable.
+- [ ] validate real Android TTS/speaker behavior.
+- [ ] validate CentOS reboot and backup/restore.
 
 ### H4 — Durable event stream
 
@@ -235,13 +271,32 @@ Exit criterion met at code/CI level: a new installation baselines silently, subs
 - [x] deployment/backup/secret regression tests and CI smoke coverage.
 - [ ] execute real CentOS reboot, private-network outage, Windows shutdown, Android reconnect, speaker/TTS, and backup/restore acceptance drills.
 
-Exit criterion met at code/CI level: the Hub can be installed as an unprivileged hardened systemd service with a root-only token environment and persistent SQLite data; live WAL databases can be backed up through SQLite's backup API and restored by the documented maintenance procedure; Windows can store/rotate Hub credentials using its existing DPAPI-backed SecretStore while retaining environment-variable fallback for development; and packaging/deployment/SecretStore regressions are covered in CI. The remaining unchecked acceptance drills require the actual CentOS/Windows/Android environment and are tracked with H3 rather than treated as simulated CI success.
+Exit criterion met at code/CI level. Remaining unchecked acceptance drills require the actual CentOS/Windows/Android environment and are tracked with H3 rather than treated as simulated CI success.
+
+### H7 — LAN Hub auto-discovery
+
+- [x] schema-v1 UDP discovery responder on the Hub.
+- [x] explicit `--lan-auto` systemd deployment mode; safe loopback default preserved.
+- [x] discovery packets contain no bearer token or vendor credential.
+- [x] Windows `--hub-auto` protected configuration stores a stable discovery identity instead of a DHCP IP.
+- [x] Windows uploader rediscovery after physical-address failure.
+- [x] Windows `hub status` displays the currently resolved Hub URL.
+- [x] Android fresh-install auto mode with manual fallback.
+- [x] Android rediscovery after request failure.
+- [x] Android dashboard displays `AUTO · http://<current-ip>:8787`.
+- [x] Android event cursor remains bound to the stable auto identity across DHCP changes.
+- [x] Python/Go/Android unit and deployment-smoke coverage.
+- [ ] real LAN broadcast validation from Windows and Android.
+- [ ] real DHCP/IP-change rediscovery validation.
+
+Code-level exit criterion: a Hub can explicitly opt into LAN discovery on UDP 8788; Windows and Android can derive the current HTTP URL from the responder source address, cache it, and re-discover after failure without storing a DHCP IP as identity. Real broadcast and address-change behavior remains H3 field acceptance.
 
 ## Non-goals for this migration
 
 - controlling ZCode from the phone;
 - exposing vendor credentials to the hub or Android;
 - public Internet deployment by default;
+- discovery across arbitrary routed networks;
 - multi-user RBAC;
 - heavyweight message brokers;
 - exactly-once delivery;
@@ -255,3 +310,4 @@ Exit criterion met at code/CI level: the Hub can be installed as an unprivileged
 4. New network loops require bounded timeouts and cancellation.
 5. Every iteration adds tests before the next protocol layer is introduced.
 6. Local diagnostics remain usable even when the hub is unreachable.
+7. Discovery is a private-network convenience layer, never an authentication mechanism.
