@@ -319,8 +319,12 @@ func eventForTask(task domain.TaskSummary, fallback time.Time) (Event, error) {
 	if task.UpdatedAt != nil && !task.UpdatedAt.IsZero() {
 		occurredAt = task.UpdatedAt.UTC()
 	}
+	eventID, err := newEventID()
+	if err != nil {
+		return Event{}, err
+	}
 	event := Event{
-		EventID:    newEventID(),
+		EventID:    eventID,
 		Type:       eventType,
 		OccurredAt: occurredAt,
 		Task: Task{
@@ -340,10 +344,10 @@ func terminal(status domain.TaskStatus) bool {
 	return status == domain.TaskCompleted || status == domain.TaskFailed
 }
 
-func newEventID() string {
+func newEventID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		panic(fmt.Sprintf("crypto/rand event id failed: %v", err))
+		return "", fmt.Errorf("generate event id: %w", err)
 	}
-	return hex.EncodeToString(raw[:])
+	return hex.EncodeToString(raw[:]), nil
 }
