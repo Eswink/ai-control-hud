@@ -1,56 +1,56 @@
 # H3 Real-Device Validation
 
-Status: field acceptance checklist for Central Hub V2
+Status: field acceptance checklist for Central Hub V2 + LAN auto-discovery
 
-This checklist is intentionally for the actual CentOS host, Windows development machine, and Android device. CI cannot claim these checks on behalf of the real network, service manager, device TTS engine, or power/reboot path.
+This checklist is for the actual CentOS host, Windows development machine, and Android device. CI validates protocol/build behavior; only the real LAN can validate broadcast delivery, DHCP address changes, device TTS, reboot, and power-loss paths.
 
-Use the validation artifacts built from the same commit whenever possible:
+The preferred intranet deployment uses:
 
-- CentOS: `ai-control-hub-h3-validation.zip`;
-- Windows: `release-windows-amd64` / `ai-control-agent.exe`;
-- Android: `ai-control-hud-debug-apk` / `app-debug.apk`.
+- Hub HTTP: TCP `8787`;
+- Hub discovery: UDP `8788`;
+- Windows protected credential mode: `auto://lan`;
+- Android configured identity: `http://auto.lan`;
+- current observed Hub address during development: `192.168.101.103` (informational only; never hard-code it).
 
-Do **not** paste bearer tokens, raw secret files, DPAPI blobs, vendor credentials, or complete environment dumps into test reports. Report only redacted commands/output and timestamps.
+LAN discovery uses UDP broadcast and normally requires clients and the Hub to share a broadcast domain. If the network/AP blocks broadcast or uses client isolation, use the manual-address fallback documented below.
+
+Do **not** paste bearer tokens, raw secret files, DPAPI blobs, vendor credentials, or complete environment dumps into test reports.
 
 ## Acceptance summary
 
-H3 is accepted when all mandatory checks below pass:
+H3 is accepted when the mandatory checks below pass:
 
-- Hub starts on the intended private address and survives a CentOS reboot;
-- Windows Agent uploads fresh state using the protected Hub credential;
-- Android reads Hub state/events and local TTS can speak a test notification;
-- stopping/shutting down Windows produces stale/degraded state without making the Hub disappear;
-- restoring Windows returns state to fresh without reconfiguration;
-- a Hub/network outage does not stop local Windows collection and queued terminal events catch up after recovery;
-- Android reconnect resumes from its persisted cursor without replaying historical terminal events;
-- an online SQLite backup can be created and passes integrity validation.
-
-Backup restore is recommended for H3 acceptance and mandatory before calling the deployment production-ready.
+- Hub starts in `--lan-auto` mode and advertises itself without exposing secrets;
+- Windows Agent automatically resolves the Hub and uploads fresh state;
+- Android automatically resolves the Hub and displays the actual current Hub URL;
+- Windows/Android recover automatically if the Hub DHCP address changes;
+- stopping/shutting down Windows produces stale/degraded state while Hub remains available;
+- Hub/network outage preserves local collection and durable terminal events catch up after recovery;
+- Android reconnect resumes from its stable event cursor;
+- CentOS reboot preserves service/state;
+- online SQLite backup passes integrity validation.
 
 ## 0. Record the test environment
 
-Record these non-secret values:
+Record non-secret values:
 
 ```text
 Validation commit: <commit sha>
 CentOS/RHEL release: <version>
-CentOS private/overlay IP: <ip>
+Current Hub IPv4: <current address; initially expected around 192.168.101.103>
 Python: <python3 --version>
 Windows version: <version>
-Windows Agent version/build: <version or artifact name>
-Android device/model: <model>
-Android version: <version>
-Private transport: LAN / Tailscale / WireGuard
+Windows Agent artifact/version: <value>
+Android model/version: <value>
+Network: trusted LAN
 Test start UTC: <timestamp>
 ```
 
-Confirm both Windows and Android can route to `<HUB_PRIVATE_IP>:8787` over the intended private network. Do not open the port to the public Internet for this test.
+Ensure TCP `8787` and UDP `8788` are allowed between these LAN devices. Do not expose either port to the public Internet.
 
-## 1. CentOS Hub install
+## 1. Install CentOS Hub with automatic LAN discovery
 
-Unpack `ai-control-hub-h3-validation.zip` on the CentOS host and enter the extracted directory.
-
-Generate a temporary ingestion token on CentOS:
+Unpack `ai-control-hub-h3-validation.zip`, enter its root, and generate a temporary ingestion token:
 
 ```bash
 umask 077
@@ -61,183 +61,216 @@ chmod 600 "$HOME/ai-control-hub.token"
 Inspect the unit before installation:
 
 ```bash
-bash scripts/ai-control-hub-systemd.sh render-unit --listen <HUB_PRIVATE_IP>:8787
+bash scripts/ai-control-hub-systemd.sh render-unit --lan-auto --hub-id dorm-hub
 ```
 
-Expected: `ExecStart` binds to `<HUB_PRIVATE_IP>:8787`; the unit does not contain the bearer token.
+Expected:
 
-Install:
+- HTTP binds `0.0.0.0:8787` because LAN mode was explicitly selected;
+- discovery is enabled on UDP `8788`;
+- the bearer token is not embedded in the unit.
+
+Install and start:
 
 ```bash
 bash scripts/ai-control-hub-systemd.sh install \
   --source "$PWD" \
   --token-file "$HOME/ai-control-hub.token" \
-  --listen <HUB_PRIVATE_IP>:8787 \
+  --lan-auto \
+  --hub-id dorm-hub \
   --agent-id desktop-main
+
+bash scripts/ai-control-hub-systemd.sh start
+bash scripts/ai-control-hub-systemd.sh status
 ```
 
-Inspect permissions:
+The installer prints candidate LAN URLs when possible. On the current network one may be:
+
+```text
+http://192.168.101.103:8787
+```
+
+Treat that address as observed state, not configuration.
+
+If `firewalld` is active, allow TCP `8787` and UDP `8788` only on the trusted/private LAN zone/interface according to the host's firewall policy.
+
+Verify permissions:
 
 ```bash
 sudo systemctl cat ai-control-hub.service
 sudo stat -c '%A %U:%G %n' /etc/ai-control-hud/hub.env /var/lib/ai-control-hud
 ```
 
-Expected:
+Expected: `hub.env` is `0600` root-only; the data directory belongs to the Hub service user.
 
-- `/etc/ai-control-hud/hub.env` is root-only (`0600`);
-- `/var/lib/ai-control-hud` is owned by the Hub service user;
-- the token is not visible in the unit file.
-
-Start and verify:
+Use the currently observed IP for a direct HTTP sanity check:
 
 ```bash
-bash scripts/ai-control-hub-systemd.sh start
-bash scripts/ai-control-hub-systemd.sh status
-curl -fsS http://<HUB_PRIVATE_IP>:8787/api/v1/health
+curl -fsS http://<CURRENT_HUB_IP>:8787/api/v1/health
 ```
 
-PASS criterion: service is active and `/api/v1/health` returns successfully from the private route.
+## 2. Configure Windows Agent for auto-discovery
 
-## 2. Windows Agent protected Hub credential
-
-Securely copy the same temporary token file to Windows, for example `C:\Temp\ai-control-hub.token`.
-
-From an elevated PowerShell in the Windows Agent directory:
+Securely copy the same temporary token file to Windows. From an elevated PowerShell in the Agent directory:
 
 ```powershell
 .\ai-control-agent.exe hub configure `
-  --hub-url http://<HUB_PRIVATE_IP>:8787 `
+  --hub-auto `
   --hub-agent-id desktop-main `
   --hub-token-file C:\Temp\ai-control-hub.token
 
 .\ai-control-agent.exe hub status
 ```
 
-Expected: status reports the Hub configuration without printing the token.
+Expected status includes:
 
-Restart the installed Agent service:
+```text
+url=auto://lan
+resolved=http://<CURRENT_HUB_IP>:8787
+hub=dorm-hub
+```
+
+The token must not be printed.
+
+Restart the installed service:
 
 ```powershell
 .\ai-control-agent.exe service restart
 .\ai-control-agent.exe service status
 ```
 
-Then from CentOS or another private client:
+Then verify through the current Hub address:
 
 ```bash
-curl -fsS http://<HUB_PRIVATE_IP>:8787/api/v1/state
-curl -fsS 'http://<HUB_PRIVATE_IP>:8787/api/v1/events?after=0&limit=1'
+curl -fsS http://<CURRENT_HUB_IP>:8787/api/v1/state
+curl -fsS 'http://<CURRENT_HUB_IP>:8787/api/v1/events?after=0&limit=1'
 ```
 
-PASS criterion: `/state` becomes available and reflects current Windows-collected data. Hub/Agent logs must not expose the bearer token.
+PASS: fresh Windows-collected state appears through the Hub without a hard-coded Hub IP in the protected Windows record.
 
-After the end-to-end path is proven, delete both plaintext token import files. Keep the protected CentOS env and Windows DPAPI record.
+After the end-to-end path is proven, delete the temporary plaintext token files from CentOS and Windows. Keep `/etc/ai-control-hud/hub.env` and the Windows protected Hub record.
 
-## 3. Android install and TTS
+## 3. Android automatic discovery and address display
 
-Install `app-debug.apk` on the Android device. If updating an older debug build with a different signing identity, uninstall the older build first.
+Install the latest H3 Android APK.
 
-Set the Hub server URL in the HUD to:
+For a **fresh install**, auto-discovery is the default. For an existing installation with a saved manual URL, open `SERVER`, enter:
 
 ```text
-http://<HUB_PRIVATE_IP>:8787
+auto.lan
+```
+
+and connect.
+
+Expected dashboard server label after discovery:
+
+```text
+AUTO · http://<CURRENT_HUB_IP>:8787
+```
+
+On the current LAN this may initially display:
+
+```text
+AUTO · http://192.168.101.103:8787
 ```
 
 Verify:
 
-1. HUD state loads from the CentOS Hub;
-2. voice status reaches ready state;
-3. press the test-voice control and confirm audible speech;
-4. completed and failed voice toggles can be changed independently;
-5. quiet-hours control is visible and defaults to 23:00–08:00 when enabled.
+1. state loads from the CentOS Hub;
+2. the actual discovered address is visible in the dashboard;
+3. TTS reaches ready state;
+4. `TEST VOICE` is audible;
+5. completed/failed speech switches work independently;
+6. quiet hours remain configurable.
 
-PASS criterion: state is usable and the device TTS engine produces audible local speech.
+The stable configured identity remains `http://auto.lan`, so a DHCP IP change does **not** reset the Android event cursor.
 
-The first event connection should silently baseline at the Hub's `latestSeq`; historical terminal events must not all speak on first install/server switch.
+## 4. DHCP/IP-change rediscovery
 
-## 4. Windows stop/shutdown -> stale -> recovery
+This is the new mandatory discovery check when it can be performed safely.
 
-Start with `/state` fresh and Android showing the same current state.
+Change the CentOS LAN address through DHCP renewal/reservation change or a controlled maintenance re-address. Do not modify the Windows Hub credential or Android server setting.
 
-Stop the Agent service (or shut down Windows for the full power-path test):
+Record:
+
+```text
+Old Hub IP: <old>
+New Hub IP: <new>
+```
+
+Expected:
+
+- old HTTP requests fail after the address move;
+- Windows Agent re-runs discovery and resumes upload to the new address;
+- `ai-control-agent.exe hub status` displays the new `resolved=` URL;
+- Android re-runs discovery after request failure and resumes polling;
+- Android server label updates to `AUTO · http://<new-ip>:8787`;
+- Android event cursor continues rather than silently rebasing because only the physical address changed.
+
+If the LAN does not permit safely forcing a DHCP change during this session, mark this `NOT RUN` and perform it before production sign-off.
+
+## 5. Windows stop/shutdown -> stale -> recovery
+
+Start with Hub `/state` fresh. Stop the Agent service or shut down Windows:
 
 ```powershell
 .\ai-control-agent.exe service stop
 ```
 
-Record UTC time. After at least the configured stale threshold (default 45 seconds), query:
+After at least the default stale threshold (45 seconds), query the current discovered Hub URL:
 
 ```bash
-curl -fsS http://<HUB_PRIVATE_IP>:8787/api/v1/state
+curl -fsS http://<CURRENT_HUB_IP>:8787/api/v1/state
 ```
 
 Expected:
 
-- last trustworthy data is retained;
+- last trustworthy data remains;
 - source health becomes `stale`;
 - aggregate state becomes `degraded`;
-- Android remains connected to the Hub rather than showing the Hub itself as offline.
+- Android stays connected to the Hub.
 
-Restart Windows/Agent:
+Restart Windows/Agent and verify fresh state returns without Hub reconfiguration.
 
-```powershell
-.\ai-control-agent.exe service start
-.\ai-control-agent.exe service status
-```
+## 6. Hub/network outage and durable event catch-up
 
-PASS criterion: state returns to fresh automatically without reconfiguring the Hub credential.
-
-## 5. Hub/network outage and durable catch-up
-
-Keep Windows and local collection running. Stop the Hub:
+Keep Windows collection running and stop the Hub:
 
 ```bash
 bash scripts/ai-control-hub-systemd.sh stop
 ```
 
-On Windows, verify the local diagnostic API remains usable. Cause one safe task completion/failure transition in the test environment while the Hub is unavailable.
-
-Restore the Hub:
+Confirm the local Windows `/api/v1/state` still works. Cause one safe completed/failed task transition while Hub is down, then restart Hub:
 
 ```bash
 bash scripts/ai-control-hub-systemd.sh start
 ```
 
-Verify the terminal event appears through the Hub event API after connectivity returns. Repeated Agent retries must not create duplicate Hub rows for the same stable `eventId`.
+PASS: queued event reaches Hub after recovery and stable `eventId` prevents duplicate semantic entries.
 
-PASS criterion: local collection survives the outage and the queued event eventually arrives once semantically.
+## 7. Android reconnect/cursor behavior
 
-## 6. Android cursor/reconnect behavior
+Disconnect Android from LAN while events occur, then reconnect.
 
-Disconnect Android from the private network while one or more events occur, then reconnect.
+- short outage (<10 minutes): eligible new events resume from saved cursor and may speak;
+- old backlog (>10 minutes): old events are not spoken one-by-one; at most one catch-up summary is produced outside quiet hours.
 
-PASS criterion for a short outage (<10 minutes): new events are consumed from the saved cursor and eligible terminal events speak according to local policy.
+PASS: reconnect does not replay historical terminal events or lose the cursor.
 
-For an intentionally old backlog (>10 minutes), PASS criterion: old events are not spoken individually; after catch-up there is at most one summary outside quiet hours.
+## 8. CentOS reboot persistence
 
-## 7. CentOS reboot persistence
-
-Before reboot, record the current event high-water mark and create a backup as in section 8.
-
-Reboot CentOS:
-
-```bash
-sudo reboot
-```
-
-After the host returns:
+Create a backup, reboot CentOS, then check:
 
 ```bash
 systemctl is-enabled ai-control-hub.service
 systemctl is-active ai-control-hub.service
-curl -fsS http://<HUB_PRIVATE_IP>:8787/api/v1/health
-curl -fsS http://<HUB_PRIVATE_IP>:8787/api/v1/state
 ```
 
-PASS criterion: service autostarts, the same SQLite state/event history remains available, and Windows resumes uploads without reconfiguration.
+After networking returns, Windows/Android should discover the Hub again even if DHCP assigned a different address.
 
-## 8. Online backup
+PASS: service autostarts, SQLite state/event history remains, and clients resume without manual IP editing.
+
+## 9. Online backup
 
 Create the backup directory once:
 
@@ -255,11 +288,11 @@ sudo -u ai-control-hub \
   --output "/var/lib/ai-control-hud/backups/hub-${stamp}.sqlite3"
 ```
 
-Validate it independently:
+Validate:
 
 ```bash
 python3 - <<'PY'
-import sqlite3, sys, glob
+import sqlite3, glob
 p = sorted(glob.glob('/var/lib/ai-control-hud/backups/hub-*.sqlite3'))[-1]
 con = sqlite3.connect(f'file:{p}?mode=ro', uri=True)
 print(con.execute('PRAGMA integrity_check').fetchone()[0])
@@ -267,26 +300,51 @@ con.close()
 PY
 ```
 
-PASS criterion: backup command succeeds and `integrity_check` prints `ok`.
+PASS: prints `ok`.
 
-For the full restore drill, follow `docs/HUB_DEPLOYMENT.md` section 10 during a maintenance window or on a disposable host.
+## 10. Manual-address fallback
 
-## 9. Result template
+Use this only when UDP broadcast is intentionally unavailable (separate VLAN/subnet, AP client isolation, firewall policy, etc.).
 
-Reply with this table or paste it into issue #62. Do not include secrets.
+CentOS:
+
+```bash
+bash scripts/ai-control-hub-systemd.sh install \
+  --source "$PWD" \
+  --token-file "$HOME/ai-control-hub.token" \
+  --listen <FIXED_PRIVATE_IP>:8787 \
+  --agent-id desktop-main
+```
+
+Windows:
+
+```powershell
+.\ai-control-agent.exe hub configure `
+  --hub-url http://<FIXED_PRIVATE_IP>:8787 `
+  --hub-token-file C:\Temp\ai-control-hub.token
+```
+
+Android: enter `http://<FIXED_PRIVATE_IP>:8787` in `SERVER`.
+
+## 11. Result template
 
 ```text
 Commit/artifacts:
-- H6/H3 commit: <sha>
+- discovery/H3 commit: <sha>
 - Windows artifact: <name>
 - Android artifact: <name>
 
-CentOS Hub install: PASS / FAIL
-Private reachability: PASS / FAIL
-Windows protected credential: PASS / FAIL
+CentOS --lan-auto install: PASS / FAIL
+TCP 8787 reachability: PASS / FAIL
+UDP 8788 Windows discovery: PASS / FAIL
+Windows resolved URL displayed: PASS / FAIL
 Windows -> Hub fresh state: PASS / FAIL
-Android state cutover: PASS / FAIL
+Android auto discovery: PASS / FAIL
+Android actual Hub URL displayed: PASS / FAIL
 Android test TTS audible: PASS / FAIL
+DHCP/IP-change Windows rediscovery: PASS / FAIL / NOT RUN
+DHCP/IP-change Android rediscovery: PASS / FAIL / NOT RUN
+Event cursor preserved across IP change: PASS / FAIL / NOT RUN
 Windows stop/shutdown stale projection: PASS / FAIL
 Windows recovery to fresh: PASS / FAIL
 Hub outage local collection survives: PASS / FAIL
@@ -297,8 +355,10 @@ CentOS reboot/autostart/persistence: PASS / FAIL
 Online backup + integrity_check: PASS / FAIL
 Restore drill: PASS / FAIL / NOT RUN
 
-Observed timestamps / redacted notes:
+Old Hub IP: <value>
+New Hub IP: <value or NOT RUN>
+Redacted notes/timestamps:
 - ...
 ```
 
-For any FAIL, include the failing command, exit code, relevant redacted log lines, and UTC timestamp. Do not retry destructive purge/restore operations until the failure is understood.
+For a FAIL, include the command, exit code, UTC timestamp, and relevant redacted log lines. Never include tokens or credential material.
