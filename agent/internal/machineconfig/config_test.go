@@ -39,6 +39,31 @@ func TestRejectsRelativeCollectorPaths(t *testing.T) {
 	}
 }
 
+func TestRejectsInvalidListenAndMissingSecret(t *testing.T) {
+	root := t.TempDir()
+	base := Config{
+		SchemaVersion:     schemaVersion,
+		Listen:            "0.0.0.0:8787",
+		ZCodeRuntimeDB:    filepath.Join(root, "db.sqlite"),
+		CommandCodeSecret: filepath.Join(root, "secret.dpapi"),
+	}
+	invalidListen := base
+	invalidListen.Listen = "8787"
+	if err := invalidListen.Validate(); err == nil {
+		t.Fatal("expected invalid listen rejection")
+	}
+	invalidPort := base
+	invalidPort.Listen = "0.0.0.0:70000"
+	if err := invalidPort.Validate(); err == nil {
+		t.Fatal("expected invalid port rejection")
+	}
+	missingSecret := base
+	missingSecret.CommandCodeSecret = ""
+	if err := missingSecret.Validate(); err == nil {
+		t.Fatal("expected missing secret rejection")
+	}
+}
+
 func TestDefaultPathCanBeOverridden(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "machine.json")
 	t.Setenv("AI_CONTROL_MACHINE_CONFIG", path)
@@ -57,7 +82,7 @@ func TestDefaultPathCanBeOverridden(t *testing.T) {
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.json")
-	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"listen":"0.0.0.0:8787","zcodeRuntimeDb":"C:/x","unknown":true}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"listen":"0.0.0.0:8787","zcodeRuntimeDb":"C:/x","commandCodeSecret":"C:/secret","unknown":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
