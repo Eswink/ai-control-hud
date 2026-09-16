@@ -102,6 +102,7 @@ def test_event_ingest_is_idempotent_and_cursor_ordered(tmp_path: Path) -> None:
         page = client.get("/api/v1/events?after=0&limit=100")
         assert page.status_code == 200
         body = page.json()
+        assert body["schemaVersion"] == 1
         assert [event["eventId"] for event in body["events"]] == [
             "event-0001",
             "event-0002",
@@ -112,11 +113,12 @@ def test_event_ingest_is_idempotent_and_cursor_ordered(tmp_path: Path) -> None:
         assert body["nextAfter"] == 2
 
         tail = client.get("/api/v1/events?after=1&limit=100").json()
+        assert tail["schemaVersion"] == 1
         assert [event["eventId"] for event in tail["events"]] == ["event-0002"]
         assert tail["nextAfter"] == 2
 
         empty = client.get("/api/v1/events?after=2&limit=100").json()
-        assert empty == {"events": [], "nextAfter": 2}
+        assert empty == {"schemaVersion": 1, "events": [], "nextAfter": 2}
 
 
 def test_event_type_and_terminal_status_must_agree(tmp_path: Path) -> None:
@@ -159,6 +161,7 @@ def test_android_event_feed_only_exposes_primary_agent(tmp_path: Path) -> None:
         ).status_code == 200
 
         body = client.get("/api/v1/events").json()
+        assert body["schemaVersion"] == 1
         assert [event["eventId"] for event in body["events"]] == ["primary-01"]
         assert body["events"][0]["agentId"] == "desktop-main"
 
@@ -186,6 +189,7 @@ def test_events_survive_hub_restart(tmp_path: Path) -> None:
     )
     with TestClient(second_app) as client:
         body = client.get("/api/v1/events?after=0").json()
+        assert body["schemaVersion"] == 1
         assert len(body["events"]) == 1
         assert body["events"][0]["eventId"] == "event-0001"
         assert body["nextAfter"] == 1
