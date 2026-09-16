@@ -10,7 +10,7 @@ Set-Location $repoRoot
 
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
-    throw "Python virtual environment not found at .venv. Run: python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e \".[dev]\""
+    throw 'Python virtual environment not found at .venv. Run: python -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e ".[dev]"'
 }
 
 Remove-Item Env:HUD_FIXTURE -ErrorAction SilentlyContinue
