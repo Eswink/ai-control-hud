@@ -46,6 +46,9 @@ func run(args []string) error {
 			return runHubCommand(args[1:])
 		case "service":
 			rememberMachineConfigArgument(args[1:])
+			if len(args) > 1 && args[1] == "upgrade" {
+				return serviceUpgrade(args[2:])
+			}
 			return runServiceCommand(args[1:])
 		case "doctor":
 			return runDoctor(args[1:])
