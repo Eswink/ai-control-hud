@@ -54,13 +54,13 @@ type Snapshot struct {
 }
 
 type Collector struct {
-	RuntimeDB            string
-	TaskIndexDB          string
-	HeartbeatSeconds     int
+	RuntimeDB             string
+	TaskIndexDB           string
+	HeartbeatSeconds      int
 	RecentTerminalSeconds int
-	TaskMaxAgeSeconds    int
-	TaskLimit            int
-	Now                  func() time.Time
+	TaskMaxAgeSeconds     int
+	TaskLimit             int
+	Now                   func() time.Time
 }
 
 func New(runtimeDB, taskIndexDB string) *Collector {
@@ -102,7 +102,7 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		if err != nil {
 			return nil, err
 		}
-		if available && len(live.Tasks) > 0 {
+		if available && live != nil && len(live.Tasks) > 0 {
 			return live, nil
 		}
 	}
