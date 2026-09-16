@@ -17,6 +17,10 @@ on:
       - 'scripts/package-agent-release.py'
       - '.github/workflows/go-release.yml'
 
+concurrency:
+  group: go-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   id-token: write
