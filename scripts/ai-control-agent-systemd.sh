@@ -5,7 +5,7 @@ SERVICE_NAME="ai-control-hud.service"
 INSTALL_DIR="/usr/local/lib/ai-control-hud"
 CONFIG_PATH="/etc/ai-control-hud/agent.json"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}"
-LISTEN="0.0.0.0:8787"
+LISTEN=""
 AGENT=""
 PROVIDER_CONFIG=""
 RUNTIME_DB=""
@@ -67,10 +67,20 @@ case "$ACTION" in
     [[ -n "$AGENT" && -f "$AGENT" ]] || { echo "--agent must point to the agent binary" >&2; exit 2; }
     agent_abs="$(cd "$(dirname "$AGENT")" && pwd)/$(basename "$AGENT")"
     config_abs="$CONFIG_PATH"
+    existing_config=0
+    if sudo test -f "$config_abs"; then
+      existing_config=1
+    fi
+
     sudo install -d -m 0755 "$INSTALL_DIR"
     sudo install -m 0755 "$agent_abs" "$INSTALL_DIR/ai-control-agent"
 
-    configure=(sudo "$INSTALL_DIR/ai-control-agent" configure --config "$config_abs" --listen "$LISTEN")
+    configure=(sudo "$INSTALL_DIR/ai-control-agent" configure --config "$config_abs")
+    if [[ -n "$LISTEN" ]]; then
+      configure+=(--listen "$LISTEN")
+    elif [[ "$existing_config" -eq 0 ]]; then
+      configure+=(--listen "0.0.0.0:8787")
+    fi
     [[ -n "$PROVIDER_CONFIG" ]] && configure+=(--provider-config "$PROVIDER_CONFIG")
     [[ -n "$RUNTIME_DB" ]] && configure+=(--runtime-db "$RUNTIME_DB")
     [[ -n "$TASK_INDEX_DB" ]] && configure+=(--task-index-db "$TASK_INDEX_DB")
@@ -86,7 +96,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/ai-control-agent run --config $config_abs
+ExecStart=$INSTALL_DIR/ai-control-agent run --config "$config_abs"
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
