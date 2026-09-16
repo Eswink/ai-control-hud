@@ -15,6 +15,7 @@ const defaultHubAgentID = "desktop-main"
 
 type hubSecretFlags struct {
 	url       *string
+	auto      *bool
 	agentID   *string
 	tokenFile *string
 }
@@ -22,6 +23,7 @@ type hubSecretFlags struct {
 func addHubSecretFlags(flags *flag.FlagSet) hubSecretFlags {
 	return hubSecretFlags{
 		url:       flags.String("hub-url", "", "remote hub URL stored in platform SecretStore"),
+		auto:      flags.Bool("hub-auto", false, "discover the Hub automatically on the local network"),
 		agentID:   flags.String("hub-agent-id", defaultHubAgentID, "remote hub agent ID stored in platform SecretStore"),
 		tokenFile: flags.String("hub-token-file", "", "one-time plaintext file containing the remote hub bearer token"),
 	}
@@ -34,8 +36,13 @@ func configureProtectedHubSecret(
 ) (path string, configured bool, importedToken bool, err error) {
 	path = machineconfig.DefaultHubSecretPath(configPath)
 	provided := flagProvided(flags, "hub-url") ||
+		flagProvided(flags, "hub-auto") ||
 		flagProvided(flags, "hub-agent-id") ||
 		flagProvided(flags, "hub-token-file")
+
+	if flagProvided(flags, "hub-url") && flagProvided(flags, "hub-auto") {
+		return path, false, false, errors.New("--hub-url and --hub-auto are mutually exclusive")
+	}
 
 	existing, exists, readErr := readExistingHubSecret(path)
 	if readErr != nil {
@@ -52,6 +59,12 @@ func configureProtectedHubSecret(
 	if flagProvided(flags, "hub-url") {
 		record.BaseURL = strings.TrimSpace(*options.url)
 	}
+	if flagProvided(flags, "hub-auto") {
+		if !*options.auto {
+			return path, false, false, errors.New("--hub-auto=false is not a valid configuration change")
+		}
+		record.BaseURL = secretstore.HubAutoBaseURL
+	}
 	if flagProvided(flags, "hub-agent-id") {
 		record.AgentID = strings.TrimSpace(*options.agentID)
 	}
@@ -64,8 +77,8 @@ func configureProtectedHubSecret(
 		importedToken = true
 	}
 
-	if !exists && !flagProvided(flags, "hub-url") {
-		return path, false, false, errors.New("--hub-url is required when creating the protected hub credential")
+	if !exists && !flagProvided(flags, "hub-url") && !flagProvided(flags, "hub-auto") {
+		return path, false, false, errors.New("--hub-url or --hub-auto is required when creating the protected hub credential")
 	}
 	if !exists && !flagProvided(flags, "hub-token-file") {
 		return path, false, false, errors.New("--hub-token-file is required when creating the protected hub credential")
