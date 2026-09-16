@@ -282,7 +282,9 @@ func staleHealth(health domain.SourceHealth, observedAt time.Time, message strin
 
 func decodeRequest(r *http.Request, target any) error {
 	decoder := json.NewDecoder(io.LimitReader(r.Body, maxRequestBody))
-	decoder.DisallowUnknownFields()
+	// Match the original Pydantic/FastAPI protocol behavior: unknown fields are
+	// ignored so a newer Agent may add optional fields without breaking an older
+	// Hub. Required fields and semantic invariants are still checked by Validate.
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
 	}
