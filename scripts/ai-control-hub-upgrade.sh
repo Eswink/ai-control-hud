@@ -46,6 +46,14 @@ fail() {
   exit 1
 }
 
+service_stably_active() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    "$SYSTEMCTL_BIN" is-active --quiet "$SERVICE_NAME" || return 1
+    sleep 0.2
+  done
+}
+
 [[ -n "$CANDIDATE" && -f "$CANDIDATE" ]] || {
   echo "--binary must point to a candidate ai-control-hub executable" >&2
   exit 2
@@ -115,7 +123,7 @@ cleanup_staged=0
 if [[ "$was_active" -eq 1 ]]; then
   start_err=0
   run_root "$SYSTEMCTL_BIN" start "$SERVICE_NAME" || start_err=$?
-  if [[ "$start_err" -eq 0 ]] && "$SYSTEMCTL_BIN" is-active --quiet "$SERVICE_NAME"; then
+  if [[ "$start_err" -eq 0 ]] && service_stably_active; then
     :
   else
     run_root "$SYSTEMCTL_BIN" stop "$SERVICE_NAME" >/dev/null 2>&1 || true
@@ -127,17 +135,17 @@ if [[ "$was_active" -eq 1 ]]; then
     restart_err=0
     if [[ "$rollback_err" -eq 0 ]]; then
       run_root "$SYSTEMCTL_BIN" start "$SERVICE_NAME" || restart_err=$?
-      if [[ "$restart_err" -eq 0 ]] && ! "$SYSTEMCTL_BIN" is-active --quiet "$SERVICE_NAME"; then
+      if [[ "$restart_err" -eq 0 ]] && ! service_stably_active; then
         restart_err=1
       fi
     fi
     if [[ "$rollback_err" -ne 0 ]]; then
-      fail "new Hub failed to start and binary rollback failed rc=$rollback_err"
+      fail "new Hub failed to remain active and binary rollback failed rc=$rollback_err"
     fi
     if [[ "$restart_err" -ne 0 ]]; then
-      fail "new Hub failed to start; old binary restored but old service restart failed rc=$restart_err"
+      fail "new Hub failed to remain active; old binary restored but old service restart failed rc=$restart_err"
     fi
-    fail "new Hub failed to start and was rolled back successfully"
+    fail "new Hub failed to remain active and was rolled back successfully"
   fi
 fi
 
