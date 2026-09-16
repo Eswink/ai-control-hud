@@ -10,15 +10,24 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-$agent = Join-Path $repoRoot $AgentPath
-if (-not (Test-Path $agent)) {
-    throw "Go shadow agent not found at $AgentPath. Place the CI artifact executable there first."
+$agent = if ([System.IO.Path]::IsPathRooted($AgentPath)) {
+    $AgentPath
+} else {
+    Join-Path $repoRoot $AgentPath
 }
+if (-not (Test-Path $agent)) {
+    throw "Go shadow agent not found at $agent. Copy the CI artifact executable to .local\bin\ai-control-agent.exe or pass -AgentPath with the downloaded EXE path."
+}
+$agent = (Resolve-Path $agent).Path
 
 Remove-Item Env:AI_CONTROL_FIXTURE -ErrorAction SilentlyContinue
 Remove-Item Env:HUD_FIXTURE -ErrorAction SilentlyContinue
 
-$providerPath = Join-Path $repoRoot $ProviderConfig
+$providerPath = if ([System.IO.Path]::IsPathRooted($ProviderConfig)) {
+    $ProviderConfig
+} else {
+    Join-Path $repoRoot $ProviderConfig
+}
 if (Test-Path $providerPath) {
     $env:HUD_ZCODE_CONFIG = (Resolve-Path $providerPath).Path
     Write-Host "[shadow] CommandCode provider mirror: configured (.local)"
