@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'android/**'
+      - 'scripts/ci-android-apk-secret-scan.py'
       - '.github/workflows/android.yml'
   pull_request:
     paths:
       - 'android/**'
+      - 'scripts/ci-android-apk-secret-scan.py'
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
@@ -41,9 +43,26 @@ jobs:
           gradle-version: '8.11.1'
           cache-provider: basic
 
+      - name: Verify APK secret scanner rejects a synthetic leak
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('/tmp/leaky.apk', 'w') as archive:
+              archive.writestr('classes.dex', b'prefix HUD_HUB_AGENT_TOKEN suffix')
+          PY
+          if python3 scripts/ci-android-apk-secret-scan.py /tmp/leaky.apk; then
+            echo 'secret scanner accepted a synthetic leak' >&2
+            exit 1
+          fi
+
       - name: Lint, test, and assemble debug APK
         working-directory: android
         run: gradle --no-daemon :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Scan debug APK for credential artifacts
+        run: python3 scripts/ci-android-apk-secret-scan.py android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
