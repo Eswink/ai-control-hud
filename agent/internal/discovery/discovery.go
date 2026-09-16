@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	platformudp "github.com/Eswink/ai-control-hud/agent/internal/platform/udp"
 )
 
 const (
@@ -45,7 +47,7 @@ func Discover(ctx context.Context, port int) (Result, error) {
 		return Result{}, fmt.Errorf("open hub discovery socket: %w", err)
 	}
 	defer conn.Close()
-	if err := enableBroadcast(conn); err != nil {
+	if err := platformudp.EnableBroadcast(conn); err != nil {
 		return Result{}, fmt.Errorf("enable hub discovery broadcast: %w", err)
 	}
 
