@@ -16,8 +16,10 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -25,23 +27,24 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "hud_settings";
     private static final String KEY_SERVER_URL = "server_url";
+    private static final String KEY_EVENT_CURSOR = "event_cursor";
+    private static final String KEY_EVENT_CURSOR_SERVER = "event_cursor_server";
+    private static final String KEY_SPEAK_COMPLETED = "speak_completed";
+    private static final String KEY_SPEAK_FAILED = "speak_failed";
+    private static final String KEY_QUIET_HOURS = "quiet_hours";
+
     private static final long POLL_MS = 2000L;
     private static final long MAX_BACKOFF_MS = 30000L;
     private static final long COUNTDOWN_TICK_MS = 1000L;
     private static final int MAX_TASK_ROWS = 4;
-    private static final Pattern ISO_TIMESTAMP = Pattern.compile(
-            "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(?:\\.\\d+)?(Z|[+-]\\d{2}:?\\d{2})$"
-    );
+    private static final int EVENT_PAGE_LIMIT = 100;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
@@ -50,10 +53,13 @@ public final class MainActivity extends Activity {
     private final ArrayList<TaskRow> taskRows = new ArrayList<>();
 
     private SharedPreferences preferences;
+    private VoiceNotifier voiceNotifier;
     private boolean polling;
     private int failureCount;
     private String serverUrl;
     private StateSnapshot lastSnapshot;
+    private String lastEventStatus = "Events not synchronized";
+    private boolean oldEventsPendingSummary;
 
     private LinearLayout setupPanel;
     private ScrollView dashboardPanel;
@@ -75,6 +81,11 @@ public final class MainActivity extends Activity {
     private TextView weeklyLabel;
     private ProgressBar fiveHourProgress;
     private ProgressBar weeklyProgress;
+    private Switch completedVoiceSwitch;
+    private Switch failedVoiceSwitch;
+    private Switch quietHoursSwitch;
+    private TextView voiceStatusText;
+    private Button testVoiceButton;
 
     private final Runnable pollRunnable = this::requestState;
     private final Runnable countdownRunnable = new Runnable() {
@@ -93,12 +104,34 @@ public final class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
         bindViews();
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        loadVoicePreferences();
+
+        voiceNotifier = new VoiceNotifier(
+                this,
+                () -> mainHandler.post(this::renderVoiceStatus)
+        );
 
         connectButton.setOnClickListener(view -> testAndSaveServer());
         findViewById(R.id.changeServerButton).setOnClickListener(view -> {
             stopPolling();
             showSetup(serverUrl);
         });
+        completedVoiceSwitch.setOnCheckedChangeListener((button, checked) -> {
+            preferences.edit().putBoolean(KEY_SPEAK_COMPLETED, checked).apply();
+            renderVoiceStatus();
+        });
+        failedVoiceSwitch.setOnCheckedChangeListener((button, checked) -> {
+            preferences.edit().putBoolean(KEY_SPEAK_FAILED, checked).apply();
+            renderVoiceStatus();
+        });
+        quietHoursSwitch.setOnCheckedChangeListener((button, checked) -> {
+            preferences.edit().putBoolean(KEY_QUIET_HOURS, checked).apply();
+            renderVoiceStatus();
+        });
+        testVoiceButton.setOnClickListener(view -> voiceNotifier.speak(
+                NotificationPolicy.testSpeech(Locale.getDefault())
+        ));
+        renderVoiceStatus();
     }
 
     @Override
@@ -122,6 +155,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (voiceNotifier != null) voiceNotifier.shutdown();
         networkExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -147,6 +181,17 @@ public final class MainActivity extends Activity {
         weeklyLabel = findViewById(R.id.weeklyLabel);
         fiveHourProgress = findViewById(R.id.fiveHourProgress);
         weeklyProgress = findViewById(R.id.weeklyProgress);
+        completedVoiceSwitch = findViewById(R.id.completedVoiceSwitch);
+        failedVoiceSwitch = findViewById(R.id.failedVoiceSwitch);
+        quietHoursSwitch = findViewById(R.id.quietHoursSwitch);
+        voiceStatusText = findViewById(R.id.voiceStatusText);
+        testVoiceButton = findViewById(R.id.testVoiceButton);
+    }
+
+    private void loadVoicePreferences() {
+        completedVoiceSwitch.setChecked(preferences.getBoolean(KEY_SPEAK_COMPLETED, true));
+        failedVoiceSwitch.setChecked(preferences.getBoolean(KEY_SPEAK_FAILED, true));
+        quietHoursSwitch.setChecked(preferences.getBoolean(KEY_QUIET_HOURS, true));
     }
 
     private void showSetup(String existingUrl) {
@@ -164,6 +209,7 @@ public final class MainActivity extends Activity {
         lastUpdateText.setText("Waiting for first snapshot");
         liveStatus.setText("CONNECTING");
         liveStatus.setTextColor(Color.rgb(253, 214, 99));
+        renderVoiceStatus();
     }
 
     private void testAndSaveServer() {
@@ -178,7 +224,14 @@ public final class MainActivity extends Activity {
             try {
                 client.checkHealth(candidate);
                 mainHandler.post(() -> {
-                    preferences.edit().putString(KEY_SERVER_URL, candidate).apply();
+                    String previousServer = preferences.getString(KEY_SERVER_URL, null);
+                    SharedPreferences.Editor editor = preferences.edit().putString(KEY_SERVER_URL, candidate);
+                    if (!candidate.equals(previousServer)) {
+                        editor.remove(KEY_EVENT_CURSOR).remove(KEY_EVENT_CURSOR_SERVER);
+                        oldEventsPendingSummary = false;
+                        lastEventStatus = "Events baseline pending";
+                    }
+                    editor.apply();
                     serverUrl = candidate;
                     failureCount = 0;
                     showDashboard();
@@ -216,15 +269,11 @@ public final class MainActivity extends Activity {
 
     private void requestState() {
         if (!polling || serverUrl == null || !requestInFlight.compareAndSet(false, true)) return;
+        String targetServer = serverUrl;
         networkExecutor.execute(() -> {
+            final StateSnapshot snapshot;
             try {
-                StateSnapshot snapshot = client.fetchState(serverUrl);
-                mainHandler.post(() -> {
-                    requestInFlight.set(false);
-                    failureCount = 0;
-                    render(snapshot);
-                    scheduleNext(POLL_MS);
-                });
+                snapshot = client.fetchState(targetServer);
             } catch (StateSnapshot.IncompatibleSchemaException incompatible) {
                 mainHandler.post(() -> {
                     requestInFlight.set(false);
@@ -232,15 +281,132 @@ public final class MainActivity extends Activity {
                     mainHandler.removeCallbacks(countdownRunnable);
                     showCompatibilityError(incompatible.receivedSchema);
                 });
+                return;
             } catch (Exception error) {
                 mainHandler.post(() -> {
                     requestInFlight.set(false);
+                    if (!polling || !targetServer.equals(serverUrl)) return;
                     failureCount++;
                     showOffline(error);
                     scheduleNext(backoffMillis(failureCount));
                 });
+                return;
             }
+
+            EventSyncResult eventSync = null;
+            Exception eventError = null;
+            try {
+                eventSync = syncEvents(targetServer);
+            } catch (Exception error) {
+                eventError = error;
+            }
+
+            EventSyncResult completedEventSync = eventSync;
+            Exception completedEventError = eventError;
+            mainHandler.post(() -> {
+                requestInFlight.set(false);
+                if (!polling || !targetServer.equals(serverUrl)) return;
+                failureCount = 0;
+                render(snapshot);
+                if (completedEventSync != null) {
+                    handleEventSync(completedEventSync);
+                } else if (completedEventError != null) {
+                    handleEventError(completedEventError);
+                }
+                scheduleNext(POLL_MS);
+            });
         });
+    }
+
+    private EventSyncResult syncEvents(String targetServer) throws Exception {
+        String cursorServer = preferences.getString(KEY_EVENT_CURSOR_SERVER, null);
+        boolean hasCursor = targetServer.equals(cursorServer) && preferences.contains(KEY_EVENT_CURSOR);
+        long after = hasCursor ? Math.max(0L, preferences.getLong(KEY_EVENT_CURSOR, 0L)) : 0L;
+        EventPage page = client.fetchEvents(targetServer, after, hasCursor ? EVENT_PAGE_LIMIT : 1);
+        boolean rebased = hasCursor && page.requiresRebase(after);
+        boolean baseline = !hasCursor || rebased;
+        long nextCursor = baseline ? page.latestSeq : page.nextAfter;
+
+        boolean saved = preferences.edit()
+                .putString(KEY_EVENT_CURSOR_SERVER, targetServer)
+                .putLong(KEY_EVENT_CURSOR, nextCursor)
+                .commit();
+        if (!saved) throw new IOException("event cursor persistence failed");
+        return new EventSyncResult(page, baseline, rebased, nextCursor);
+    }
+
+    private void handleEventSync(EventSyncResult sync) {
+        if (sync.baseline) {
+            oldEventsPendingSummary = false;
+            lastEventStatus = (sync.rebased ? "Events rebased" : "Events baseline") + " · #" + sync.cursor;
+            renderVoiceStatus();
+            return;
+        }
+
+        long nowMillis = System.currentTimeMillis();
+        int minuteOfDay = localMinuteOfDay();
+        boolean quietHoursEnabled = quietHoursSwitch.isChecked();
+        boolean quietNow = quietHoursEnabled && NotificationPolicy.isQuietMinute(minuteOfDay);
+
+        for (EventPage.EventItem event : sync.page.events) {
+            boolean voiceEnabled = voiceEnabledFor(event);
+            if (NotificationPolicy.shouldSpeak(
+                    event,
+                    voiceEnabled,
+                    quietHoursEnabled,
+                    minuteOfDay,
+                    nowMillis
+            )) {
+                voiceNotifier.speak(NotificationPolicy.speechText(event, Locale.getDefault()));
+            } else if (voiceEnabled && !quietNow && NotificationPolicy.isTooOld(event, nowMillis)) {
+                oldEventsPendingSummary = true;
+            }
+        }
+
+        boolean caughtUp = sync.page.nextAfter >= sync.page.latestSeq;
+        if (caughtUp && oldEventsPendingSummary && !quietNow) {
+            voiceNotifier.speak(NotificationPolicy.offlineSummaryText(Locale.getDefault()));
+            oldEventsPendingSummary = false;
+        }
+
+        lastEventStatus = caughtUp
+                ? "Events synced · #" + sync.cursor
+                : "Events catching up · #" + sync.cursor + " / #" + sync.page.latestSeq;
+        renderVoiceStatus();
+    }
+
+    private void handleEventError(Exception error) {
+        if (error instanceof EventPage.IncompatibleSchemaException) {
+            EventPage.IncompatibleSchemaException incompatible = (EventPage.IncompatibleSchemaException) error;
+            lastEventStatus = "Event schema " + incompatible.receivedSchema + " unsupported";
+        } else {
+            String name = error.getClass().getSimpleName();
+            lastEventStatus = "Event sync error · " + (name.isEmpty() ? "network" : name);
+        }
+        renderVoiceStatus();
+    }
+
+    private boolean voiceEnabledFor(EventPage.EventItem event) {
+        if (event == null) return false;
+        if ("task.completed".equals(event.type)) return completedVoiceSwitch.isChecked();
+        if ("task.failed".equals(event.type)) return failedVoiceSwitch.isChecked();
+        return false;
+    }
+
+    private int localMinuteOfDay() {
+        Calendar calendar = Calendar.getInstance();
+        return calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE);
+    }
+
+    private void renderVoiceStatus() {
+        if (voiceStatusText == null || testVoiceButton == null) return;
+        boolean ready = voiceNotifier != null && voiceNotifier.isReady();
+        String tts = ready ? "TTS READY" : "TTS STARTING / UNAVAILABLE";
+        String policy = "complete " + onOff(completedVoiceSwitch != null && completedVoiceSwitch.isChecked())
+                + " · fail " + onOff(failedVoiceSwitch != null && failedVoiceSwitch.isChecked())
+                + " · quiet " + onOff(quietHoursSwitch != null && quietHoursSwitch.isChecked());
+        voiceStatusText.setText(tts + " · " + lastEventStatus + "\n" + policy);
+        testVoiceButton.setEnabled(ready);
     }
 
     private void render(StateSnapshot state) {
@@ -493,6 +659,10 @@ public final class MainActivity extends Activity {
         return value == null || value.isEmpty() ? "--" : value;
     }
 
+    private static String onOff(boolean enabled) {
+        return enabled ? "on" : "off";
+    }
+
     private static int taskPriority(String status) {
         if ("failed".equals(status)) return 0;
         if ("running".equals(status)) return 1;
@@ -533,7 +703,7 @@ public final class MainActivity extends Activity {
     }
 
     private static String formatResetCountdown(String isoTimestamp) {
-        Long resetMillis = parseIsoMillis(isoTimestamp);
+        Long resetMillis = IsoTime.parseMillis(isoTimestamp);
         if (resetMillis == null) return "--";
         long remainingSeconds = Math.max(0L, (resetMillis - System.currentTimeMillis()) / 1000L);
         long days = remainingSeconds / 86400L;
@@ -542,36 +712,6 @@ public final class MainActivity extends Activity {
         long seconds = remainingSeconds % 60L;
         if (days > 0) return String.format(Locale.US, "%dd %02dh", days, hours);
         return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds);
-    }
-
-    private static Long parseIsoMillis(String value) {
-        if (value == null) return null;
-        Matcher match = ISO_TIMESTAMP.matcher(value);
-        if (!match.matches()) return null;
-        try {
-            int year = Integer.parseInt(match.group(1));
-            int month = Integer.parseInt(match.group(2));
-            int day = Integer.parseInt(match.group(3));
-            int hour = Integer.parseInt(match.group(4));
-            int minute = Integer.parseInt(match.group(5));
-            int second = Integer.parseInt(match.group(6));
-            String zone = match.group(7);
-
-            int offsetMinutes = 0;
-            if (!"Z".equals(zone)) {
-                int sign = zone.charAt(0) == '-' ? -1 : 1;
-                int offsetHours = Integer.parseInt(zone.substring(1, 3));
-                int offsetMins = Integer.parseInt(zone.substring(zone.length() - 2));
-                offsetMinutes = sign * (offsetHours * 60 + offsetMins);
-            }
-
-            Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"), Locale.US);
-            calendar.clear();
-            calendar.set(year, month - 1, day, hour, minute, second);
-            return calendar.getTimeInMillis() - offsetMinutes * 60_000L;
-        } catch (RuntimeException invalidTimestamp) {
-            return null;
-        }
     }
 
     private static String join(List<String> values, String separator) {
@@ -596,6 +736,20 @@ public final class MainActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         );
+    }
+
+    private static final class EventSyncResult {
+        final EventPage page;
+        final boolean baseline;
+        final boolean rebased;
+        final long cursor;
+
+        EventSyncResult(EventPage page, boolean baseline, boolean rebased, long cursor) {
+            this.page = page;
+            this.baseline = baseline;
+            this.rebased = rebased;
+            this.cursor = cursor;
+        }
     }
 
     private static final class TaskRow {
