@@ -12,6 +12,7 @@ $root = Join-Path $env:RUNNER_TEMP "ai-control-hud-g6-service-smoke"
 $runtimeDb = Join-Path $root "runtime.sqlite"
 $taskIndexDb = Join-Path $root "tasks-index.sqlite"
 $apiKeyFile = Join-Path $root "commandcode.key"
+$badUpgradeAgent = Join-Path $root "broken-upgrade.exe"
 $implicitProviderConfig = Join-Path $repoRoot ".local\commandcode-provider.json"
 $machineConfig = Join-Path $root "state\agent.json"
 $installedAgent = Join-Path ${env:ProgramFiles} "AI Control HUD\ai-control-agent.exe"
@@ -36,6 +37,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 [System.IO.File]::WriteAllText($apiKeyFile, "test-only`n", [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($badUpgradeAgent, "this is intentionally not a Windows executable", [System.Text.UTF8Encoding]::new($false))
 
 # Place a valid legacy provider file at the historical implicit location. The
 # service install must ignore it because --provider-config is not supplied.
@@ -141,7 +143,7 @@ function Assert-InstalledBinaryMatchesSource {
     $installedHash = (Get-FileHash -Algorithm SHA256 $installedAgent).Hash
     $sourceHash = (Get-FileHash -Algorithm SHA256 $agent).Hash
     if ($installedHash -ne $sourceHash) {
-        throw "installed service executable does not match upgrade source"
+        throw "installed service executable does not match validated Agent source"
     }
 }
 
@@ -206,6 +208,24 @@ try {
     $state = Wait-AgentState
     if ($state.zcode.health.status -ne "ok") {
         throw "ZCode did not recover after running service upgrade"
+    }
+
+    Write-Host "[g6-ci] forcing failed upgrade and verifying automatic rollback"
+    $protectedBeforeRollback = Get-ProtectedStateHashes
+    & $agent service upgrade --source $badUpgradeAgent
+    if ($LASTEXITCODE -eq 0) {
+        throw "broken upgrade candidate unexpectedly succeeded"
+    }
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction Stop
+    if ($service.Status -ne "Running") {
+        throw "old service was not restored to running after failed upgrade: $($service.Status)"
+    }
+    Assert-ProtectedStateHashes $protectedBeforeRollback
+    Assert-InstalledBinaryMatchesSource
+    Assert-UpgradeScratchClean
+    $state = Wait-AgentState
+    if ($state.zcode.health.status -ne "ok") {
+        throw "old service did not recover after failed upgrade rollback"
     }
 
     Write-Host "[g6-ci] restarting service"
@@ -285,7 +305,7 @@ try {
         throw "service stop after reinstall failed with exit code $LASTEXITCODE"
     }
 
-    Write-Host "[g6-ci] manual CommandCode key + SCM + transactional upgrade + DPAPI + reinstall smoke PASSED"
+    Write-Host "[g6-ci] manual CommandCode key + SCM + transactional upgrade/rollback + DPAPI + reinstall smoke PASSED"
 } finally {
     if ($installed) {
         try {
