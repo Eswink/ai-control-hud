@@ -29,7 +29,7 @@ final class EventPage {
 
         long nextAfter = root.getLong("nextAfter");
         long latestSeq = root.getLong("latestSeq");
-        if (nextAfter < 0 || latestSeq < 0 || latestSeq < nextAfter) {
+        if (nextAfter < 0 || latestSeq < 0) {
             throw new JSONException("Invalid event cursor metadata");
         }
 
@@ -80,8 +80,16 @@ final class EventPage {
         }
         long expectedNext = events.isEmpty() ? after : previous;
         if (nextAfter != expectedNext) throw new JSONException("Unexpected nextAfter cursor");
-        if (latestSeq < nextAfter) throw new JSONException("latestSeq is behind nextAfter");
+        // An empty page with latestSeq < after is valid after a hub database reset.
+        // The Android client rebases silently to latestSeq instead of getting stuck.
+        if (!events.isEmpty() && latestSeq < nextAfter) {
+            throw new JSONException("latestSeq is behind delivered events");
+        }
         return this;
+    }
+
+    boolean requiresRebase(long after) {
+        return events.isEmpty() && latestSeq < after;
     }
 
     private static String optionalString(JSONObject object, String key) {
