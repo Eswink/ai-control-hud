@@ -34,6 +34,36 @@ func (s *SnapshotStore) Replace(next domain.HudState) error {
 	return nil
 }
 
+func (s *SnapshotStore) UpdateZCode(next domain.ZCodeState) error {
+	return s.mutate(func(state *domain.HudState) {
+		state.ZCode = next
+	})
+}
+
+func (s *SnapshotStore) UpdateCommandCode(next domain.CommandCodeState) error {
+	return s.mutate(func(state *domain.HudState) {
+		state.CommandCode = next
+	})
+}
+
+func (s *SnapshotStore) mutate(update func(*domain.HudState)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	next := clone(s.state)
+	update(&next)
+	if next.ZCode.Health.Status == domain.SourceOK && next.CommandCode.Health.Status == domain.SourceOK {
+		next.Overall.Status = domain.OverallLive
+	} else {
+		next.Overall.Status = domain.OverallDegraded
+	}
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	s.state = clone(next)
+	return nil
+}
+
 func clone(in domain.HudState) domain.HudState {
 	out := in
 
