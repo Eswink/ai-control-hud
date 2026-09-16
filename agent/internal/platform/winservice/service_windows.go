@@ -51,6 +51,20 @@ func Install(name, displayName, description, executable, configPath string) erro
 		return fmt.Errorf("install service: %w", err)
 	}
 	defer service.Close()
+
+	recovery := []mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 15 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
+	}
+	if err := service.SetRecoveryActions(recovery, 24*60*60); err != nil {
+		_ = service.Delete()
+		return fmt.Errorf("configure service recovery: %w", err)
+	}
+	if err := service.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		_ = service.Delete()
+		return fmt.Errorf("configure non-crash service recovery: %w", err)
+	}
 	return nil
 }
 
