@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/Eswink/ai-control-hud/agent/internal/discovery"
 	"github.com/Eswink/ai-control-hud/agent/internal/domain"
 	"github.com/Eswink/ai-control-hud/agent/internal/events"
 )
@@ -17,6 +19,10 @@ type Client struct {
 	config Config
 	http   *http.Client
 	now    func() time.Time
+
+	resolveMu       sync.Mutex
+	resolvedBaseURL string
+	discover        func(context.Context) (string, error)
 }
 
 type stateEnvelope struct {
@@ -42,11 +48,28 @@ func NewClient(config Config) (*Client, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	return &Client{
+	client := &Client{
 		config: config,
 		http:   &http.Client{Timeout: config.RequestTimeout},
 		now:    time.Now,
-	}, nil
+	}
+	if !config.IsAutoDiscover() {
+		client.resolvedBaseURL = config.BaseURL
+	}
+	client.discover = func(ctx context.Context) (string, error) {
+		result, err := discovery.Discover(ctx, discovery.DefaultPort)
+		if err != nil {
+			return "", err
+		}
+		return result.BaseURL, nil
+	}
+	return client, nil
+}
+
+func (c *Client) ResolvedBaseURL() string {
+	c.resolveMu.Lock()
+	defer c.resolveMu.Unlock()
+	return c.resolvedBaseURL
 }
 
 func (c *Client) UploadState(ctx context.Context, state domain.HudState) error {
@@ -92,10 +115,34 @@ func (c *Client) postJSON(ctx context.Context, path string, value any) error {
 	if err != nil {
 		return fmt.Errorf("encode hub request: %w", err)
 	}
+	baseURL, err := c.resolveBaseURL(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve hub address: %w", err)
+	}
+	firstErr := c.postJSONAt(ctx, baseURL, path, payload)
+	if firstErr == nil || !c.config.IsAutoDiscover() {
+		return firstErr
+	}
+
+	c.invalidateResolvedBaseURL(baseURL)
+	rediscovered, discoverErr := c.resolveBaseURL(ctx)
+	if discoverErr != nil {
+		return fmt.Errorf("%w; hub rediscovery failed: %v", firstErr, discoverErr)
+	}
+	if rediscovered == baseURL {
+		return firstErr
+	}
+	if err := c.postJSONAt(ctx, rediscovered, path, payload); err != nil {
+		return fmt.Errorf("hub request failed after rediscovery from %s to %s: %w", baseURL, rediscovered, err)
+	}
+	return nil
+}
+
+func (c *Client) postJSONAt(ctx context.Context, baseURL, path string, payload []byte) error {
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		c.config.BaseURL+path,
+		baseURL+path,
 		bytes.NewReader(payload),
 	)
 	if err != nil {
@@ -116,4 +163,41 @@ func (c *Client) postJSON(ctx context.Context, path string, value any) error {
 		return fmt.Errorf("hub %s returned HTTP %d", path, response.StatusCode)
 	}
 	return nil
+}
+
+func (c *Client) resolveBaseURL(ctx context.Context) (string, error) {
+	if !c.config.IsAutoDiscover() {
+		return c.config.BaseURL, nil
+	}
+	c.resolveMu.Lock()
+	defer c.resolveMu.Unlock()
+	if c.resolvedBaseURL != "" {
+		return c.resolvedBaseURL, nil
+	}
+	discoverCtx, cancel := context.WithTimeout(ctx, minDuration(c.config.RequestTimeout, 2*time.Second))
+	defer cancel()
+	baseURL, err := c.discover(discoverCtx)
+	if err != nil {
+		return "", err
+	}
+	c.resolvedBaseURL = baseURL
+	return baseURL, nil
+}
+
+func (c *Client) invalidateResolvedBaseURL(expected string) {
+	c.resolveMu.Lock()
+	defer c.resolveMu.Unlock()
+	if c.resolvedBaseURL == expected {
+		c.resolvedBaseURL = ""
+	}
+}
+
+func minDuration(left, right time.Duration) time.Duration {
+	if left <= 0 {
+		return right
+	}
+	if right <= 0 || left < right {
+		return left
+	}
+	return right
 }
