@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -63,6 +64,10 @@ func Load(path string) (Config, error) {
 	if err := decoder.Decode(&config); err != nil {
 		return config, errors.New("machine config is invalid")
 	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return config, errors.New("machine config contains trailing data")
+	}
 	if err := config.Validate(); err != nil {
 		return config, err
 	}
@@ -85,6 +90,10 @@ func Save(path string, config Config) error {
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, data, 0o600); err != nil {
 		return fmt.Errorf("write machine config: %w", err)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("replace machine config: %w", err)
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		_ = os.Remove(temporary)
