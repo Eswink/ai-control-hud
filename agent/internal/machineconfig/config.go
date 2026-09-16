@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/Eswink/ai-control-hud/agent/internal/platform/fileacl"
 )
 
 const schemaVersion = 1
@@ -82,6 +84,11 @@ func Save(path string, config Config) error {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create machine config directory: %w", err)
 	}
+	if fileacl.Supported() {
+		if err := fileacl.Protect(directory); err != nil {
+			return fmt.Errorf("protect machine config directory: %w", err)
+		}
+	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode machine config: %w", err)
@@ -91,13 +98,37 @@ func Save(path string, config Config) error {
 	if err := os.WriteFile(temporary, data, 0o600); err != nil {
 		return fmt.Errorf("write machine config: %w", err)
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if fileacl.Supported() {
+		if err := fileacl.Protect(temporary); err != nil {
+			_ = os.Remove(temporary)
+			return fmt.Errorf("protect temporary machine config: %w", err)
+		}
+	}
+	backup := path + ".bak"
+	_ = os.Remove(backup)
+	hadExisting := false
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := os.Rename(path, backup); err != nil {
+			_ = os.Remove(temporary)
+			return fmt.Errorf("stage existing machine config: %w", err)
+		}
+		hadExisting = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		_ = os.Remove(temporary)
-		return fmt.Errorf("replace machine config: %w", err)
+		return fmt.Errorf("inspect existing machine config: %w", statErr)
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		_ = os.Remove(temporary)
+		if hadExisting {
+			_ = os.Rename(backup, path)
+		}
 		return fmt.Errorf("commit machine config: %w", err)
+	}
+	_ = os.Remove(backup)
+	if fileacl.Supported() {
+		if err := fileacl.Protect(path); err != nil {
+			return fmt.Errorf("protect machine config: %w", err)
+		}
 	}
 	return nil
 }
