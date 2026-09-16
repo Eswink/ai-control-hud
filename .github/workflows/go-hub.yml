@@ -15,11 +15,15 @@ on:
       - 'scripts/backup_hub_db.py'
       - 'pyproject.toml'
       - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ai-control-hub-lan-doctor.sh'
       - 'scripts/ci-go-only-hub.sh'
       - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/hub_bundle.py'
+      - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
       - 'docs/H3_FIELD_VALIDATION.md'
       - 'docs/HUB_DEPLOYMENT.md'
+      - 'docs/HUB_LAN_DOCTOR.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-hub.yml'
@@ -37,11 +41,15 @@ on:
       - 'scripts/backup_hub_db.py'
       - 'pyproject.toml'
       - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ai-control-hub-lan-doctor.sh'
       - 'scripts/ci-go-only-hub.sh'
       - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/hub_bundle.py'
+      - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
       - 'docs/H3_FIELD_VALIDATION.md'
       - 'docs/HUB_DEPLOYMENT.md'
+      - 'docs/HUB_LAN_DOCTOR.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-hub.yml'
@@ -175,12 +183,33 @@ jobs:
         shell: bash
         run: bash ./scripts/ci-hub-deployment-smoke.sh
 
-      - name: Build binary-only H3 validation bundle
+      - name: Build production Hub bundle
+        shell: bash
         run: |
+          set -euo pipefail
+          output='dist/ai-control-hub-linux-amd64.zip'
+          python3 scripts/package-hub-bundle.py \
+            --hub-binary dist/ai-control-hub \
+            --version "$HUB_VERSION" \
+            --output "$output"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          unzip -q "$output" -d "$tmp"
+          grep -Fxq 'bundle_schema=1' "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'component=ai-control-hub' "$tmp/BUILD_INFO.txt"
+          grep -Fxq "version=$HUB_VERSION" "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'entrypoint=docs/HUB_DEPLOYMENT.md' "$tmp/BUILD_INFO.txt"
+          (cd "$tmp" && sha256sum -c SHA256SUMS)
+
+      - name: Verify historical H3 packager compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 scripts/package-h3-validation.py \
             --hub-binary dist/ai-control-hub \
-            --output dist/ai-control-hub-h3-validation.zip
-          unzip -l dist/ai-control-hub-h3-validation.zip
+            --version "$HUB_VERSION" \
+            --output dist/ai-control-hub-h3-compat.zip
+          unzip -p dist/ai-control-hub-h3-compat.zip BUILD_INFO.txt | grep -Fxq "version=$HUB_VERSION"
 
       - name: Upload Go Hub binary
         uses: actions/upload-artifact@v7
@@ -192,10 +221,18 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Upload H3 validation bundle
+      - name: Upload production Hub bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hub-production-bundle
+          path: dist/ai-control-hub-linux-amd64.zip
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload historical H3 compatibility bundle
         uses: actions/upload-artifact@v7
         with:
           name: ai-control-hub-h3-validation-bundle
-          path: dist/ai-control-hub-h3-validation.zip
+          path: dist/ai-control-hub-h3-compat.zip
           if-no-files-found: error
           retention-days: 90
