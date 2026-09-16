@@ -176,6 +176,14 @@ func DefaultSecretPath(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "commandcode.dpapi")
 }
 
+// DefaultHubSecretPath deliberately derives the remote-hub credential path
+// from the machine config instead of adding a new field to schema v1. Existing
+// agent.json files remain byte-for-byte compatible while the optional hub
+// credential gains platform SecretStore protection.
+func DefaultHubSecretPath(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "hub.dpapi")
+}
+
 func cleanAbsolute(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
