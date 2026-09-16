@@ -22,10 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+  contents: read
 
 jobs:
   build:
@@ -132,9 +129,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
       - name: Resolve version
         shell: bash
         env:
@@ -169,15 +163,6 @@ jobs:
             | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Attest release archives and manifest
-        if: github.event_name != 'pull_request'
-        uses: actions/attest@v4.2.2
-        with:
-          subject-path: |
-            dist/*.zip
-            dist/*.tar.gz
-            dist/SHA256SUMS
-
       - name: Upload combined release artifact
         uses: actions/upload-artifact@v7
         with:
@@ -186,8 +171,61 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  attest:
+    if: github.event_name != 'pull_request'
+    needs: manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Resolve version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="$INPUT_VERSION"
+          else
+            version="${REF_NAME#v}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Download combined release artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ai-control-agent-release-${{ env.VERSION }}
+          path: dist
+
+      - name: Attest release archives and manifest
+        uses: actions/attest@v4.2.2
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [manifest, attest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Download combined release artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ai-control-agent-release-${{ env.VERSION }}
+          path: dist
+
       - name: Publish GitHub release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
