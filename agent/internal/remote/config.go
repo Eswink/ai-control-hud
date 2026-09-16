@@ -9,11 +9,13 @@ import (
 )
 
 const (
-	defaultAgentID          = "desktop-main"
-	defaultRequestTimeout   = 4 * time.Second
-	defaultSnapshotInterval = 5 * time.Second
+	defaultAgentID           = "desktop-main"
+	defaultRequestTimeout    = 4 * time.Second
+	defaultSnapshotInterval  = 5 * time.Second
 	defaultHeartbeatInterval = 10 * time.Second
-	defaultMaxBackoff       = 30 * time.Second
+	defaultEventScanInterval = time.Second
+	defaultEventSendInterval = 2 * time.Second
+	defaultMaxBackoff        = 30 * time.Second
 )
 
 type Config struct {
@@ -23,6 +25,8 @@ type Config struct {
 	RequestTimeout    time.Duration
 	SnapshotInterval  time.Duration
 	HeartbeatInterval time.Duration
+	EventScanInterval time.Duration
+	EventSendInterval time.Duration
 	MaxBackoff        time.Duration
 }
 
@@ -40,6 +44,8 @@ func FromEnvironment() (Config, bool, error) {
 		RequestTimeout:    defaultRequestTimeout,
 		SnapshotInterval:  defaultSnapshotInterval,
 		HeartbeatInterval: defaultHeartbeatInterval,
+		EventScanInterval: defaultEventScanInterval,
+		EventSendInterval: defaultEventSendInterval,
 		MaxBackoff:        defaultMaxBackoff,
 	}
 	if config.AgentID == "" {
@@ -64,6 +70,12 @@ func (c *Config) normalize() {
 	if c.HeartbeatInterval <= 0 {
 		c.HeartbeatInterval = defaultHeartbeatInterval
 	}
+	if c.EventScanInterval <= 0 {
+		c.EventScanInterval = defaultEventScanInterval
+	}
+	if c.EventSendInterval <= 0 {
+		c.EventSendInterval = defaultEventSendInterval
+	}
 	if c.MaxBackoff <= 0 {
 		c.MaxBackoff = defaultMaxBackoff
 	}
@@ -87,7 +99,12 @@ func (c Config) Validate() error {
 	if c.Token == "" {
 		return errors.New("AI_CONTROL_HUB_TOKEN is required when remote hub upload is enabled")
 	}
-	if c.RequestTimeout <= 0 || c.SnapshotInterval <= 0 || c.HeartbeatInterval <= 0 || c.MaxBackoff <= 0 {
+	if c.RequestTimeout <= 0 ||
+		c.SnapshotInterval <= 0 ||
+		c.HeartbeatInterval <= 0 ||
+		c.EventScanInterval <= 0 ||
+		c.EventSendInterval <= 0 ||
+		c.MaxBackoff <= 0 {
 		return errors.New("remote hub timing values must be positive")
 	}
 	return nil
@@ -101,6 +118,8 @@ func NewConfig(baseURL, agentID, token string) (Config, error) {
 		RequestTimeout:    defaultRequestTimeout,
 		SnapshotInterval:  defaultSnapshotInterval,
 		HeartbeatInterval: defaultHeartbeatInterval,
+		EventScanInterval: defaultEventScanInterval,
+		EventSendInterval: defaultEventSendInterval,
 		MaxBackoff:        defaultMaxBackoff,
 	}
 	config.normalize()
