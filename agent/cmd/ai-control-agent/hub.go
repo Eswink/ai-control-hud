@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/Eswink/ai-control-hud/agent/internal/discovery"
 	"github.com/Eswink/ai-control-hud/agent/internal/machineconfig"
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/secretstore"
 )
@@ -46,7 +49,7 @@ func runHubConfigure(args []string) error {
 		return err
 	}
 	if !configured {
-		return errors.New("hub configure requires --hub-url/--hub-agent-id/--hub-token-file or an existing protected hub credential")
+		return errors.New("hub configure requires --hub-url/--hub-auto/--hub-agent-id/--hub-token-file or an existing protected hub credential")
 	}
 	record, err := secretstore.ReadHub(path)
 	if err != nil {
@@ -81,6 +84,17 @@ func runHubStatus(args []string) error {
 	record, err := secretstore.ReadHub(path)
 	if err != nil {
 		return err
+	}
+	if record.BaseURL == secretstore.HubAutoBaseURL {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		result, discoverErr := discovery.Discover(ctx, discovery.DefaultPort)
+		if discoverErr != nil {
+			fmt.Printf("[hub] configured=true agent=%s url=%s resolved=unavailable secret=%s\n", record.AgentID, record.BaseURL, path)
+			return nil
+		}
+		fmt.Printf("[hub] configured=true agent=%s url=%s resolved=%s hub=%s version=%s secret=%s\n", record.AgentID, record.BaseURL, result.BaseURL, result.HubID, result.HubVersion, path)
+		return nil
 	}
 	fmt.Printf("[hub] configured=true agent=%s url=%s secret=%s\n", record.AgentID, record.BaseURL, path)
 	return nil
