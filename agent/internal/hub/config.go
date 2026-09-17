@@ -153,22 +153,34 @@ func (c Config) Validate() error {
 	if c.HTTPPort < 1 || c.HTTPPort > 65535 {
 		return errors.New("HUD_HUB_HTTP_PORT must be within 1..65535")
 	}
-	if c.EventRetentionDays < 1 {
+	retentionDays, retentionMin, retentionMax, maintenanceInterval := c.effectiveRetention()
+	if retentionDays < 1 {
 		return errors.New("HUD_HUB_EVENT_RETENTION_DAYS must be at least 1")
 	}
-	if c.EventRetentionMin < 0 {
+	if retentionMin < 0 {
 		return errors.New("HUD_HUB_EVENT_RETENTION_MIN must be non-negative")
 	}
-	if c.EventRetentionMax < 1 {
+	if retentionMax < 1 {
 		return errors.New("HUD_HUB_EVENT_RETENTION_MAX must be at least 1")
 	}
-	if c.EventRetentionMax < c.EventRetentionMin {
+	if retentionMax < retentionMin {
 		return errors.New("HUD_HUB_EVENT_RETENTION_MAX must be greater than or equal to HUD_HUB_EVENT_RETENTION_MIN")
 	}
-	if c.MaintenanceInterval < time.Minute {
+	if maintenanceInterval < time.Minute {
 		return errors.New("Hub maintenance interval must be at least 1 minute")
 	}
 	return nil
+}
+
+// effectiveRetention keeps older programmatic Config literals source-compatible:
+// when every new retention field is left at its zero value, use the production
+// defaults. Environment-derived Config values are populated explicitly, so an
+// operator can still set HUD_HUB_EVENT_RETENTION_MIN=0 intentionally.
+func (c Config) effectiveRetention() (days, minimum, maximum int, interval time.Duration) {
+	if c.EventRetentionDays == 0 && c.EventRetentionMin == 0 && c.EventRetentionMax == 0 && c.MaintenanceInterval == 0 {
+		return DefaultEventRetentionDays, DefaultEventRetentionMin, DefaultEventRetentionMax, DefaultMaintenanceInterval
+	}
+	return c.EventRetentionDays, c.EventRetentionMin, c.EventRetentionMax, c.MaintenanceInterval
 }
 
 func parseBool(raw string) (bool, error) {
