@@ -140,8 +140,7 @@ migrate_legacy_agent_unit() {
       return 1
     fi
     if ! sudo systemctl start "$SERVICE_NAME" || ! wait_service_active "$SERVICE_NAME"; then
-      echo "[systemd] new Agent service failed to become active; restoring historical Agent service" >&2
-      rollback_new_unit_after_migration_failure 1 || true
+      echo "[systemd] new Agent service failed to become active; migration will roll back" >&2
       return 1
     fi
   fi
