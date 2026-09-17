@@ -63,7 +63,7 @@ PY
 }
 
 hash_file() {
-  python3 - "$1" <<'PY'
+  sudo python3 - "$1" <<'PY'
 import hashlib
 import pathlib
 import sys
