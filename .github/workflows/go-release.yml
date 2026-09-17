@@ -15,6 +15,23 @@ on:
     paths:
       - 'agent/**'
       - 'scripts/package-agent-release.py'
+      - 'scripts/ai-control-agent-systemd.sh'
+      - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ai-control-agent-unix-upgrade.sh'
+      - 'scripts/hub_bundle.py'
+      - 'scripts/package-hub-bundle.py'
+      - 'scripts/package-h3-validation.py'
+      - 'scripts/go_release_manifest.py'
+      - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ai-control-hub-lan-doctor.sh'
+      - 'scripts/ai-control-hub-upgrade.sh'
+      - 'docs/G7_CROSS_PLATFORM.md'
+      - 'docs/HUB_DEPLOYMENT.md'
+      - 'docs/HUB_LAN_DOCTOR.md'
+      - 'docs/HUB_UPGRADE.md'
+      - 'docs/HUB_V2_PLAN.md'
+      - 'docs/GO_RELEASE.md'
+      - 'docs/GO_RELEASE_MANIFEST.md'
       - '.github/workflows/go-release.yml'
 
 concurrency:
@@ -79,7 +96,7 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Reproducible cross-build
+      - name: Reproducible Agent cross-build
         shell: bash
         env:
           CGO_ENABLED: '0'
@@ -97,28 +114,160 @@ jobs:
           cmp "build-a/${{ matrix.binary }}" "build-b/${{ matrix.binary }}"
           cp "build-a/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
           archive="ai-control-agent_${VERSION}_${{ matrix.target }}.${{ matrix.format }}"
+          extra_args=()
+          case "${{ matrix.goos }}" in
+            linux)
+              extra_args+=(
+                --extra "scripts/ai-control-agent-systemd.sh=ai-control-agent-systemd.sh"
+                --extra "scripts/ai-control-agent-unix-upgrade.sh=ai-control-agent-unix-upgrade.sh"
+              )
+              ;;
+            darwin)
+              extra_args+=(
+                --extra "scripts/ai-control-agent-launchd.sh=ai-control-agent-launchd.sh"
+                --extra "scripts/ai-control-agent-unix-upgrade.sh=ai-control-agent-unix-upgrade.sh"
+              )
+              ;;
+          esac
           python3 scripts/package-agent-release.py \
             --binary "dist/${{ matrix.binary }}" \
             --output "dist/$archive" \
             --archive-name "${{ matrix.binary }}" \
-            --format "${{ matrix.format }}"
+            --format "${{ matrix.format }}" \
+            "${extra_args[@]}"
           rm "dist/${{ matrix.binary }}"
           (cd dist && sha256sum "$archive" > "$archive.sha256")
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
-      - name: Verify embedded version
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+      - name: Verify Agent archive contents
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf verify
           mkdir -p verify
-          gzip -dc "dist/$ARCHIVE" | tar -xf - -C verify
-          test "$(verify/ai-control-agent version)" = "$VERSION"
+          case "${{ matrix.format }}" in
+            zip) unzip -q "dist/$ARCHIVE" -d verify ;;
+            tar.gz) gzip -dc "dist/$ARCHIVE" | tar -xf - -C verify ;;
+          esac
+          test -f "verify/${{ matrix.binary }}"
+          case "${{ matrix.goos }}" in
+            windows)
+              test ! -e verify/ai-control-agent-unix-upgrade.sh
+              ;;
+            linux)
+              test -x verify/ai-control-agent
+              test -x verify/ai-control-agent-systemd.sh
+              test -x verify/ai-control-agent-unix-upgrade.sh
+              test ! -e verify/ai-control-agent-launchd.sh
+              test "$(verify/ai-control-agent version)" = "$VERSION"
+              ;;
+            darwin)
+              test -x verify/ai-control-agent
+              test -x verify/ai-control-agent-launchd.sh
+              test -x verify/ai-control-agent-unix-upgrade.sh
+              test ! -e verify/ai-control-agent-systemd.sh
+              ;;
+          esac
 
-      - name: Upload target artifact
+      - name: Upload Agent target artifact
         uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.target }}
+          name: release-agent-${{ matrix.target }}
+          path: |
+            dist/${{ env.ARCHIVE }}
+            dist/${{ env.ARCHIVE }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  hub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+
+      - name: Resolve version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          case "${{ github.event_name }}" in
+            workflow_dispatch) version="$INPUT_VERSION" ;;
+            pull_request) version="0.0.0-pr.$PR_NUMBER" ;;
+            *) version="${REF_NAME#v}" ;;
+          esac
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Reproducible static Go Hub build
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist build-a build-b
+          ldflags="-s -w -buildid= -X main.version=$VERSION"
+          (
+            cd agent
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o ../build-a/ai-control-hub ./cmd/ai-control-hub
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o ../build-b/ai-control-hub ./cmd/ai-control-hub
+          )
+          cmp build-a/ai-control-hub build-b/ai-control-hub
+          cp build-a/ai-control-hub dist/ai-control-hub
+          test "$(dist/ai-control-hub version)" = "$VERSION"
+          file dist/ai-control-hub | grep -Fq 'statically linked'
+
+      - name: Package production Hub bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="ai-control-hub_${VERSION}_linux-amd64.zip"
+          python3 scripts/package-hub-bundle.py \
+            --hub-binary dist/ai-control-hub \
+            --version "$VERSION" \
+            --output "dist/$archive"
+          rm dist/ai-control-hub
+          (cd dist && sha256sum "$archive" > "$archive.sha256")
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Verify Hub bundle metadata and embedded version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          unzip -q "dist/$ARCHIVE" -d "$tmp"
+          test "$("$tmp/ai-control-hub" version)" = "$VERSION"
+          grep -Fxq 'bundle_schema=1' "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'component=ai-control-hub' "$tmp/BUILD_INFO.txt"
+          grep -Fxq "version=$VERSION" "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'entrypoint=docs/HUB_DEPLOYMENT.md' "$tmp/BUILD_INFO.txt"
+          (
+            cd "$tmp"
+            sha256sum -c SHA256SUMS
+          )
+          test -f "$tmp/scripts/ai-control-hub-systemd.sh"
+          test -f "$tmp/scripts/ai-control-hub-lan-doctor.sh"
+          test -f "$tmp/scripts/ai-control-hub-upgrade.sh"
+          test -f "$tmp/docs/HUB_DEPLOYMENT.md"
+          test -f "$tmp/docs/HUB_UPGRADE.md"
+
+      - name: Upload Hub target artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-hub-linux-amd64
           path: |
             dist/${{ env.ARCHIVE }}
             dist/${{ env.ARCHIVE }}.sha256
@@ -126,9 +275,12 @@ jobs:
           retention-days: 30
 
   manifest:
-    needs: build
+    needs: [build, hub]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Resolve version
         shell: bash
         env:
@@ -150,7 +302,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Verify target checksums and build manifest
+      - name: Verify target checksums and build unified manifests
         shell: bash
         run: |
           set -euo pipefail
@@ -161,12 +313,27 @@ jobs:
           find . -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print0 \
             | sort -z \
             | xargs -0 sha256sum > SHA256SUMS
-          cat SHA256SUMS
+          grep -Fq "ai-control-agent_${VERSION}_windows-amd64.zip" SHA256SUMS
+          grep -Fq "ai-control-hub_${VERSION}_linux-amd64.zip" SHA256SUMS
+          cd ..
+          python3 scripts/go_release_manifest.py build \
+            --version "$VERSION" \
+            --commit "$GITHUB_SHA" \
+            --output dist/RELEASE_MANIFEST.json \
+            --artifact "ai-control-agent:windows-amd64:dist/ai-control-agent_${VERSION}_windows-amd64.zip" \
+            --artifact "ai-control-agent:linux-amd64:dist/ai-control-agent_${VERSION}_linux-amd64.tar.gz" \
+            --artifact "ai-control-agent:darwin-amd64:dist/ai-control-agent_${VERSION}_darwin-amd64.tar.gz" \
+            --artifact "ai-control-agent:darwin-arm64:dist/ai-control-agent_${VERSION}_darwin-arm64.tar.gz" \
+            --artifact "ai-control-hub:linux-amd64:dist/ai-control-hub_${VERSION}_linux-amd64.zip"
+          python3 scripts/go_release_manifest.py verify \
+            --manifest dist/RELEASE_MANIFEST.json \
+            --directory dist
+          cat dist/RELEASE_MANIFEST.json
 
-      - name: Upload combined release artifact
+      - name: Upload combined Go release artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ai-control-agent-release-${{ env.VERSION }}
+          name: ai-control-hud-go-release-${{ env.VERSION }}
           path: dist/
           if-no-files-found: error
           retention-days: 30
@@ -194,19 +361,20 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Download combined release artifact
+      - name: Download combined Go release artifact
         uses: actions/download-artifact@v8.0.1
         with:
-          name: ai-control-agent-release-${{ env.VERSION }}
+          name: ai-control-hud-go-release-${{ env.VERSION }}
           path: dist
 
-      - name: Attest release archives and manifest
+      - name: Attest Go release archives and manifests
         uses: actions/attest@v4.2.2
         with:
           subject-path: |
             dist/*.zip
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/RELEASE_MANIFEST.json
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -219,10 +387,10 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Download combined release artifact
+      - name: Download combined Go release artifact
         uses: actions/download-artifact@v8.0.1
         with:
-          name: ai-control-agent-release-${{ env.VERSION }}
+          name: ai-control-hud-go-release-${{ env.VERSION }}
           path: dist
 
       - name: Publish GitHub release
@@ -233,4 +401,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
             --generate-notes \
-            --title "AI Control Agent $VERSION"
+            --title "AI Control HUD $VERSION"

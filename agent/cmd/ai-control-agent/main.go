@@ -40,7 +40,15 @@ func run(args []string) error {
 			return runConfigure(args[1:])
 		case "config":
 			return runConfigCommand(args[1:])
+		case "commandcode":
+			return runCommandCodeCommand(args[1:])
+		case "hub":
+			return runHubCommand(args[1:])
 		case "service":
+			rememberMachineConfigArgument(args[1:])
+			if len(args) > 1 && args[1] == "upgrade" {
+				return serviceUpgrade(args[2:])
+			}
 			return runServiceCommand(args[1:])
 		case "doctor":
 			return runDoctor(args[1:])
@@ -66,7 +74,9 @@ func runForeground(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *config != "" {
-		return runConfigured(ctx, absolute(*config))
+		resolvedConfig := absolute(*config)
+		_ = os.Setenv("AI_CONTROL_MACHINE_CONFIG", resolvedConfig)
+		return runConfigured(ctx, resolvedConfig)
 	}
 
 	started := time.Now().UTC()
@@ -141,6 +151,14 @@ func serve(
 	if collectorLoop != nil {
 		collectorLoop.Start(runCtx)
 	}
+	remoteLoop, err := startRemoteUploader(runCtx, snapshotStore)
+	if err != nil {
+		cancel()
+		if collectorLoop != nil {
+			collectorLoop.Wait()
+		}
+		return fmt.Errorf("configure remote hub: %w", err)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -166,6 +184,9 @@ func serve(
 		if collectorLoop != nil {
 			collectorLoop.Wait()
 		}
+		if remoteLoop != nil {
+			remoteLoop.Wait()
+		}
 		err := <-errCh
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
@@ -176,10 +197,22 @@ func serve(
 		if collectorLoop != nil {
 			collectorLoop.Wait()
 		}
+		if remoteLoop != nil {
+			remoteLoop.Wait()
+		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 		return nil
+	}
+}
+
+func rememberMachineConfigArgument(args []string) {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--config" {
+			_ = os.Setenv("AI_CONTROL_MACHINE_CONFIG", absolute(args[i+1]))
+			return
+		}
 	}
 }
 

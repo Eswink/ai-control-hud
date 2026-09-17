@@ -34,3 +34,29 @@ func TestWindowsDPAPIRoundTrip(t *testing.T) {
 		t.Fatalf("got %#v, want %#v", got, record)
 	}
 }
+
+func TestWindowsHubDPAPIRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub.dpapi")
+	record := HubRecord{
+		AgentID: "desktop-main",
+		BaseURL: "http://100.64.0.10:8787",
+		Token:   "hub-dpapi-test-secret",
+	}
+	if err := WriteHub(path, record); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(record.Token)) {
+		t.Fatal("protected file contains plaintext hub token")
+	}
+	got, err := ReadHub(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != record {
+		t.Fatalf("got %#v, want %#v", got, record)
+	}
+}

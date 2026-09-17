@@ -11,8 +11,11 @@ if (-not (Test-Path $agent)) {
 $root = Join-Path $env:RUNNER_TEMP "ai-control-hud-g6-service-smoke"
 $runtimeDb = Join-Path $root "runtime.sqlite"
 $taskIndexDb = Join-Path $root "tasks-index.sqlite"
-$providerConfig = Join-Path $root "provider.json"
+$apiKeyFile = Join-Path $root "commandcode.key"
+$badUpgradeAgent = Join-Path $root "broken-upgrade.exe"
+$implicitProviderConfig = Join-Path $repoRoot ".local\commandcode-provider.json"
 $machineConfig = Join-Path $root "state\agent.json"
+$installedAgent = Join-Path ${env:ProgramFiles} "AI Control HUD\ai-control-agent.exe"
 $port = 18787
 $baseUrl = "http://127.0.0.1:$port"
 
@@ -33,23 +36,32 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to create synthetic G6 ZCode databases"
 }
 
-$providerJson = @'
+[System.IO.File]::WriteAllText($apiKeyFile, "test-only`n", [System.Text.UTF8Encoding]::new($false))
+& go build -o $badUpgradeAgent (Join-Path $repoRoot "scripts\fixtures\broken-service-agent.go")
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to build the preflight-valid broken service candidate"
+}
+
+# Place a valid legacy provider file at the historical implicit location. The
+# service install must ignore it because --provider-config is not supplied.
+New-Item -ItemType Directory -Force (Split-Path -Parent $implicitProviderConfig) | Out-Null
+$implicitProviderJson = @'
 {
   "provider": {
-    "command": {
-      "name": "command",
+    "implicit-canary": {
+      "name": "implicit-canary",
       "kind": "openai",
       "enabled": true,
       "options": {
         "baseURL": "https://api.commandcode.ai/provider/v1",
-        "apiKey": "test-only"
+        "apiKey": "must-not-be-auto-imported"
       },
       "models": {}
     }
   }
 }
 '@
-[System.IO.File]::WriteAllText($providerConfig, $providerJson, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($implicitProviderConfig, $implicitProviderJson, [System.Text.UTF8Encoding]::new($false))
 
 function Wait-AgentState {
     param([int]$TimeoutSeconds = 30)
@@ -89,12 +101,69 @@ function Wait-AgentState {
     throw "G6 service did not become healthy in time. Last request error: $lastError"
 }
 
+function Assert-ManualCommandCodeProvider {
+    $statusOutput = (& $agent commandcode status --config $machineConfig 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "commandcode status failed with exit code $LASTEXITCODE"
+    }
+    Write-Host $statusOutput.Trim()
+    if ($statusOutput -notmatch 'provider=command-code') {
+        throw "protected CommandCode provider is not the manually imported provider"
+    }
+    if ($statusOutput -match 'implicit-canary') {
+        throw "historical implicit provider file was unexpectedly imported"
+    }
+}
+
+function Get-ProtectedStateHashes {
+    $machineState = Get-Content $machineConfig -Raw | ConvertFrom-Json
+    return [ordered]@{
+        config = (Get-FileHash -Algorithm SHA256 $machineConfig).Hash
+        secret = (Get-FileHash -Algorithm SHA256 $machineState.commandCodeSecret).Hash
+    }
+}
+
+function Assert-ProtectedStateHashes {
+    param($Expected)
+    $actual = Get-ProtectedStateHashes
+    if ($actual.config -ne $Expected.config) {
+        throw "machine config changed during service upgrade"
+    }
+    if ($actual.secret -ne $Expected.secret) {
+        throw "CommandCode DPAPI SecretStore changed during service upgrade"
+    }
+}
+
+function Assert-UpgradeScratchClean {
+    foreach ($suffix in @('.upgrade.new', '.upgrade.bak')) {
+        if (Test-Path ($installedAgent + $suffix)) {
+            throw "service upgrade scratch artifact remains: $($installedAgent + $suffix)"
+        }
+    }
+}
+
+function Assert-InstalledBinaryMatchesSource {
+    $installedHash = (Get-FileHash -Algorithm SHA256 $installedAgent).Hash
+    $sourceHash = (Get-FileHash -Algorithm SHA256 $agent).Hash
+    if ($installedHash -ne $sourceHash) {
+        throw "installed service executable does not match validated Agent source"
+    }
+}
+
 $installed = $false
 try {
-    Write-Host "[g6-ci] installing Windows service"
+    Write-Host "[g6-ci] importing operator-supplied CommandCode key into DPAPI"
+    & $agent commandcode configure `
+        --config $machineConfig `
+        --api-key-file $apiKeyFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "commandcode configure failed with exit code $LASTEXITCODE"
+    }
+    Assert-ManualCommandCodeProvider
+
+    Write-Host "[g6-ci] installing Windows service without provider import flag"
     & $agent service install `
         --config $machineConfig `
-        --provider-config $providerConfig `
         --runtime-db $runtimeDb `
         --task-index-db $taskIndexDb `
         --listen "127.0.0.1:$port"
@@ -108,6 +177,13 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "doctor failed with exit code $LASTEXITCODE"
     }
+    Assert-ManualCommandCodeProvider
+
+    Write-Host "[g6-ci] deleting operator plaintext key after protected-store validation"
+    Remove-Item -Force $apiKeyFile
+    if (Test-Path $apiKeyFile) {
+        throw "plaintext CommandCode key still exists after deletion"
+    }
 
     Write-Host "[g6-ci] starting LocalSystem service"
     & $agent service start
@@ -117,6 +193,42 @@ try {
     $state = Wait-AgentState
     if ($state.zcode.summary.running -ne 1) {
         throw "unexpected synthetic ZCode running count: $($state.zcode.summary.running)"
+    }
+
+    Write-Host "[g6-ci] upgrading while service is running"
+    $protectedBeforeUpgrade = Get-ProtectedStateHashes
+    & $agent service upgrade --source $agent
+    if ($LASTEXITCODE -ne 0) {
+        throw "running service upgrade failed with exit code $LASTEXITCODE"
+    }
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction Stop
+    if ($service.Status -ne "Running") {
+        throw "service did not return to running state after upgrade: $($service.Status)"
+    }
+    Assert-ProtectedStateHashes $protectedBeforeUpgrade
+    Assert-InstalledBinaryMatchesSource
+    Assert-UpgradeScratchClean
+    $state = Wait-AgentState
+    if ($state.zcode.health.status -ne "ok") {
+        throw "ZCode did not recover after running service upgrade"
+    }
+
+    Write-Host "[g6-ci] forcing post-preflight SCM failure and verifying automatic rollback"
+    $protectedBeforeRollback = Get-ProtectedStateHashes
+    & $agent service upgrade --source $badUpgradeAgent
+    if ($LASTEXITCODE -eq 0) {
+        throw "broken service candidate unexpectedly succeeded"
+    }
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction Stop
+    if ($service.Status -ne "Running") {
+        throw "old service was not restored to running after failed upgrade: $($service.Status)"
+    }
+    Assert-ProtectedStateHashes $protectedBeforeRollback
+    Assert-InstalledBinaryMatchesSource
+    Assert-UpgradeScratchClean
+    $state = Wait-AgentState
+    if ($state.zcode.health.status -ne "ok") {
+        throw "old service did not recover after failed upgrade rollback"
     }
 
     Write-Host "[g6-ci] restarting service"
@@ -139,6 +251,20 @@ try {
         throw "service status after stop is $($service.Status)"
     }
 
+    Write-Host "[g6-ci] upgrading while service is stopped"
+    $protectedBeforeStoppedUpgrade = Get-ProtectedStateHashes
+    & $agent service upgrade --source $agent
+    if ($LASTEXITCODE -ne 0) {
+        throw "stopped service upgrade failed with exit code $LASTEXITCODE"
+    }
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction Stop
+    if ($service.Status -ne "Stopped") {
+        throw "stopped service was unexpectedly started by upgrade: $($service.Status)"
+    }
+    Assert-ProtectedStateHashes $protectedBeforeStoppedUpgrade
+    Assert-InstalledBinaryMatchesSource
+    Assert-UpgradeScratchClean
+
     Write-Host "[g6-ci] removing service while preserving machine state"
     & $agent service remove --config $machineConfig
     if ($LASTEXITCODE -ne 0) {
@@ -152,19 +278,12 @@ try {
     if (-not (Test-Path $machineState.commandCodeSecret)) {
         throw "DPAPI SecretStore was unexpectedly removed"
     }
+    Assert-ManualCommandCodeProvider
 
-    Write-Host "[g6-ci] deleting plaintext provider import before reinstall"
-    Remove-Item -Force $providerConfig
-    if (Test-Path $providerConfig) {
-        throw "plaintext provider import still exists after deletion"
-    }
-
-    Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore"
-    & $agent service install `
-        --config $machineConfig `
-        --provider-config $providerConfig
+    Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore without provider flag"
+    & $agent service install --config $machineConfig
     if ($LASTEXITCODE -ne 0) {
-        throw "service reinstall without plaintext provider failed with exit code $LASTEXITCODE"
+        throw "service reinstall from protected SecretStore failed with exit code $LASTEXITCODE"
     }
     $installed = $true
 
@@ -172,6 +291,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "doctor after reinstall failed with exit code $LASTEXITCODE"
     }
+    Assert-ManualCommandCodeProvider
 
     & $agent service start
     if ($LASTEXITCODE -ne 0) {
@@ -188,7 +308,7 @@ try {
         throw "service stop after reinstall failed with exit code $LASTEXITCODE"
     }
 
-    Write-Host "[g6-ci] Windows SCM + DPAPI + reinstall smoke PASSED"
+    Write-Host "[g6-ci] manual CommandCode key + SCM + transactional upgrade/rollback + DPAPI + reinstall smoke PASSED"
 } finally {
     if ($installed) {
         try {
@@ -196,6 +316,12 @@ try {
         } catch {
             Write-Warning "G6 CI cleanup command failed: $($_.Exception.Message)"
         }
+    }
+    foreach ($suffix in @('.upgrade.new', '.upgrade.bak')) {
+        Remove-Item -Force ($installedAgent + $suffix) -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $implicitProviderConfig) {
+        Remove-Item -Force $implicitProviderConfig -ErrorAction SilentlyContinue
     }
     try {
         $leftover = Get-Service -Name "AIControlHUD" -ErrorAction SilentlyContinue

@@ -2,6 +2,39 @@ plugins {
     id 'com.android.application'
 }
 
+def configuredVersionName = System.getenv('HUD_ANDROID_VERSION_NAME')?.trim()
+def appVersionName = configuredVersionName ?: '0.1.0-dev'
+if (appVersionName.length() > 100 || !(appVersionName ==~ /[0-9A-Za-z][0-9A-Za-z._+-]*/)) {
+    throw new GradleException('HUD_ANDROID_VERSION_NAME must be 1..100 safe version characters')
+}
+
+def configuredVersionCode = System.getenv('HUD_ANDROID_VERSION_CODE')?.trim()
+def appVersionCode = 1
+if (configuredVersionCode) {
+    try {
+        appVersionCode = Integer.parseInt(configuredVersionCode)
+    } catch (NumberFormatException ignored) {
+        throw new GradleException('HUD_ANDROID_VERSION_CODE must be an integer')
+    }
+    if (appVersionCode <= 0 || appVersionCode > 2100000000) {
+        throw new GradleException('HUD_ANDROID_VERSION_CODE must be within 1..2100000000')
+    }
+}
+
+def releaseSigningValues = [
+    keystorePath: System.getenv('HUD_ANDROID_KEYSTORE_PATH'),
+    storePassword: System.getenv('HUD_ANDROID_KEYSTORE_PASSWORD'),
+    keyAlias: System.getenv('HUD_ANDROID_KEY_ALIAS'),
+    keyPassword: System.getenv('HUD_ANDROID_KEY_PASSWORD'),
+]
+def releaseSigningCount = releaseSigningValues.values().count { value ->
+    value != null && !value.trim().isEmpty()
+}
+def releaseSigningConfigured = releaseSigningCount == releaseSigningValues.size()
+if (releaseSigningCount > 0 && !releaseSigningConfigured) {
+    throw new GradleException('Android release signing is partially configured; provide all HUD_ANDROID_* signing variables')
+}
+
 android {
     namespace 'dev.eswink.aicontrolhud'
     compileSdk 35
@@ -10,8 +43,25 @@ android {
         applicationId 'dev.eswink.aicontrolhud'
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0-dev'
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    sourceSets {
+        test {
+            resources.srcDir file('../../server/tests/fixtures')
+        }
+    }
+
+    if (releaseSigningConfigured) {
+        signingConfigs {
+            release {
+                storeFile file(releaseSigningValues.keystorePath)
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            }
+        }
     }
 
     compileOptions {
@@ -23,6 +73,16 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
         }
     }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    // Android provides org.json at runtime; the JVM implementation is test-only
+    // so local unit tests can execute the production StateSnapshot parser.
+    testImplementation 'org.json:json:20240303'
 }

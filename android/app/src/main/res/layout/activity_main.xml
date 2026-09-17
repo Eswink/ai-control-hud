@@ -33,7 +33,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:hint="192.168.1.50:8787"
+            android:hint="auto.lan or 192.168.101.103:8787"
             android:inputType="textUri"
             android:singleLine="true"
             android:textColor="#F1F3F4"
@@ -93,7 +93,7 @@
                     android:textStyle="bold" />
             </LinearLayout>
 
-            <TextView
+            <dev.eswink.aicontrolhud.ServerAddressView
                 android:id="@+id/serverLabel"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -254,12 +254,69 @@
                 android:progress="0"
                 android:progressTint="#8AB4F8" />
 
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="20dp"
+                android:background="#27313D" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="VOICE ALERTS"
+                android:textColor="#9AA0A6"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <Switch
+                android:id="@+id/completedVoiceSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="Speak completed tasks"
+                android:textColor="#F1F3F4"
+                android:textSize="14sp" />
+
+            <Switch
+                android:id="@+id/failedVoiceSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Speak failed tasks"
+                android:textColor="#F1F3F4"
+                android:textSize="14sp" />
+
+            <Switch
+                android:id="@+id/quietHoursSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Quiet hours 23:00–08:00"
+                android:textColor="#F1F3F4"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/voiceStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="TTS starting"
+                android:textColor="#9AA0A6"
+                android:textSize="11sp" />
+
+            <Button
+                android:id="@+id/testVoiceButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="TEST VOICE" />
+
             <Button
                 android:id="@+id/changeServerButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center_horizontal"
                 android:layout_marginTop="24dp"
+                android:layout_marginBottom="16dp"
                 android:text="SERVER" />
         </LinearLayout>
     </ScrollView>

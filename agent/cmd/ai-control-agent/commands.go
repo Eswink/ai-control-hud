@@ -77,7 +77,7 @@ func serviceInstall(args []string) error {
 		return err
 	}
 	configPath := flags.String("config", defaultConfig, "machine configuration path")
-	providerConfig := flags.String("provider-config", defaultProviderConfigPath(), "one-time CommandCode provider import file")
+	providerConfig := flags.String("provider-config", "", "explicit one-time CommandCode provider import file")
 	listen := flags.String("listen", "0.0.0.0:8787", "service HTTP listen address")
 	runtimeDB := flags.String("runtime-db", "", "ZCode runtime Goal database")
 	taskIndexDB := flags.String("task-index-db", "", "ZCode task index database")
@@ -127,29 +127,9 @@ func serviceInstall(args []string) error {
 	if hasExistingConfig && existingConfig.CommandCodeSecret != "" {
 		secretPath = existingConfig.CommandCodeSecret
 	}
-	providerPath := absolute(*providerConfig)
-	importedCredential := false
-	if fileExists(providerPath) {
-		provider, loadErr := commandcode.LoadProvider(providerPath, "")
-		if loadErr != nil {
-			return loadErr
-		}
-		if err := commandcode.ValidateProvider(provider, false); err != nil {
-			return err
-		}
-		record := secretstore.Record{ProviderID: provider.ID, BaseURL: provider.BaseURL, APIKey: provider.APIKey}
-		if err := secretstore.Write(secretPath, record); err != nil {
-			return fmt.Errorf("write platform SecretStore: %w", err)
-		}
-		importedCredential = true
-	} else {
-		record, readErr := secretstore.Read(secretPath)
-		if readErr != nil {
-			return fmt.Errorf("provider import file is unavailable and existing SecretStore cannot be read: %w", readErr)
-		}
-		if err := commandcode.ValidateProvider(providerFromSecret(record), false); err != nil {
-			return err
-		}
+	importedCredential, err := prepareCommandCodeSecret(flags, *providerConfig, secretPath)
+	if err != nil {
+		return err
 	}
 
 	config := machineconfig.New(listenValue, resolvedRuntime, resolvedTaskIndex, secretPath)
@@ -189,10 +169,10 @@ func serviceInstall(args []string) error {
 		fmt.Println("[service] Windows Firewall inbound rule=private,domain")
 	}
 	if importedCredential {
-		fmt.Println("[service] CommandCode credential imported to Windows DPAPI SecretStore")
+		fmt.Println("[service] CommandCode credential imported from explicit provider file to Windows DPAPI SecretStore")
 		fmt.Println("[service] plaintext provider import file was not modified; remove it only after service validation")
 	} else {
-		fmt.Println("[service] existing Windows DPAPI SecretStore reused; plaintext provider import is no longer required")
+		fmt.Println("[service] existing Windows DPAPI SecretStore reused; plaintext provider import is not required")
 	}
 	return nil
 }
@@ -364,13 +344,6 @@ func providerFromSecret(record secretstore.Record) *commandcode.Provider {
 		BaseURL: record.BaseURL,
 		APIKey:  record.APIKey,
 	}
-}
-
-func defaultProviderConfigPath() string {
-	if configured := strings.TrimSpace(os.Getenv("HUD_ZCODE_CONFIG")); configured != "" {
-		return configured
-	}
-	return filepath.Join(".local", "commandcode-provider.json")
 }
 
 func defaultServiceExecutablePath() (string, error) {

@@ -4,11 +4,19 @@ on:
   push:
     paths:
       - 'android/**'
+      - 'server/tests/fixtures/**'
+      - 'docs/HUB_V2_PLAN.md'
+      - 'scripts/ci-android-apk-secret-scan.py'
       - '.github/workflows/android.yml'
+      - '.github/workflows/android-release.yml'
   pull_request:
     paths:
       - 'android/**'
+      - 'server/tests/fixtures/**'
+      - 'docs/HUB_V2_PLAN.md'
+      - 'scripts/ci-android-apk-secret-scan.py'
       - '.github/workflows/android.yml'
+      - '.github/workflows/android-release.yml'
   workflow_dispatch:
 
 permissions:
@@ -41,9 +49,83 @@ jobs:
           gradle-version: '8.11.1'
           cache-provider: basic
 
-      - name: Lint, test, and assemble debug APK
+      - name: Verify APK secret scanner rejects a synthetic leak
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('/tmp/leaky.apk', 'w') as archive:
+              archive.writestr('classes.dex', b'prefix HUD_HUB_AGENT_TOKEN suffix')
+          PY
+          if python3 scripts/ci-android-apk-secret-scan.py /tmp/leaky.apk; then
+            echo 'secret scanner accepted a synthetic leak' >&2
+            exit 1
+          fi
+
+      - name: Lint, test, and assemble debug plus unsigned release
         working-directory: android
-        run: gradle --no-daemon :app:lintDebug :app:testDebugUnitTest :app:assembleDebug
+        run: |
+          gradle --no-daemon \
+            :app:lintDebug \
+            :app:testDebugUnitTest \
+            :app:assembleDebug \
+            :app:lintRelease \
+            :app:testReleaseUnitTest \
+            :app:assembleRelease
+
+      - name: Scan debug and unsigned release APKs
+        run: |
+          python3 scripts/ci-android-apk-secret-scan.py \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Create ephemeral CI release key
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -genkeypair \
+            -keystore "${RUNNER_TEMP}/ci-release.jks" \
+            -storepass changeit \
+            -keypass changeit \
+            -alias ci \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 2 \
+            -dname 'CN=AI Control HUD CI, OU=CI, O=AI Control HUD, L=Test, ST=Test, C=US' \
+            -noprompt
+          chmod 600 "${RUNNER_TEMP}/ci-release.jks"
+
+      - name: Build signed release with ephemeral key and injected version
+        working-directory: android
+        env:
+          HUD_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/ci-release.jks
+          HUD_ANDROID_KEYSTORE_PASSWORD: changeit
+          HUD_ANDROID_KEY_ALIAS: ci
+          HUD_ANDROID_KEY_PASSWORD: changeit
+          HUD_ANDROID_VERSION_NAME: 0.0.0-ci
+          HUD_ANDROID_VERSION_CODE: '900001'
+        run: gradle --no-daemon :app:assembleRelease
+
+      - name: Verify signed release, version metadata, and secret scan
+        shell: bash
+        env:
+          EXPECTED_VERSION_NAME: 0.0.0-ci
+          EXPECTED_VERSION_CODE: '900001'
+        run: |
+          set -euo pipefail
+          apk='android/app/build/outputs/apk/release/app-release.apk'
+          test -f "$apk"
+          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk"
+          badging="$("${ANDROID_HOME}/build-tools/35.0.0/aapt" dump badging "$apk" | head -n 1)"
+          grep -F "versionCode='${EXPECTED_VERSION_CODE}'" <<<"$badging"
+          grep -F "versionName='${EXPECTED_VERSION_NAME}'" <<<"$badging"
+          python3 scripts/ci-android-apk-secret-scan.py "$apk"
+
+      - name: Remove ephemeral CI release key
+        if: always()
+        shell: bash
+        run: rm -f "${RUNNER_TEMP}/ci-release.jks"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7

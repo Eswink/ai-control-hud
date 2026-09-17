@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -28,6 +29,7 @@ _RUNNING = {"running", "in_progress", "inprogress", "active", "working", "execut
 _WAITING = {"waiting", "queued", "pending", "ready"}
 _FAILED = {"failed", "failure", "error", "errored"}
 _COMPLETED = {"completed", "complete", "done", "success", "succeeded", "finished"}
+NowProvider = Callable[[], datetime]
 
 
 def _default_db_path() -> Path:
@@ -123,12 +125,14 @@ class ZCodeSQLiteAdapter:
         *,
         task_limit: int | None = None,
         task_max_age_seconds: int | None = None,
+        now_provider: NowProvider | None = None,
     ):
         self.db_path = Path(db_path).expanduser() if db_path is not None else _default_db_path()
         self.task_limit = task_limit or _positive_limit(os.getenv("HUD_ZCODE_TASK_LIMIT"))
         self.task_max_age_seconds = task_max_age_seconds or _positive_seconds(
             os.getenv("HUD_ZCODE_TASK_MAX_AGE_SECONDS")
         )
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     @classmethod
     def from_environment(cls) -> "ZCodeSQLiteAdapter | None":
@@ -145,8 +149,11 @@ class ZCodeSQLiteAdapter:
         if not self.db_path.is_file():
             raise PublicAdapterError("ZCode task index not found")
 
+        current = self.now_provider()
+        if current.tzinfo is None:
+            raise ValueError("ZCode now_provider must return a timezone-aware datetime")
         cutoff_ms = int(
-            (datetime.now(timezone.utc).timestamp() - self.task_max_age_seconds) * 1000
+            (current.astimezone(timezone.utc).timestamp() - self.task_max_age_seconds) * 1000
         )
         path = self.db_path.resolve().as_posix()
         uri = f"file:{quote(path, safe='/:')}?mode=ro"

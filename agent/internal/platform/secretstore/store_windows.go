@@ -20,7 +20,48 @@ func Write(path string, record Record) error {
 	if err := record.Validate(); err != nil {
 		return err
 	}
-	plain, err := json.Marshal(record)
+	return writeProtectedJSON(path, record)
+}
+
+func Read(path string) (Record, error) {
+	var record Record
+	if err := readProtectedJSON(path, &record); err != nil {
+		return record, err
+	}
+	if err := record.Validate(); err != nil {
+		return Record{}, err
+	}
+	return record, nil
+}
+
+func WriteHub(path string, record HubRecord) error {
+	if err := record.Validate(); err != nil {
+		return err
+	}
+	return writeProtectedJSON(path, record)
+}
+
+func ReadHub(path string) (HubRecord, error) {
+	var record HubRecord
+	if err := readProtectedJSON(path, &record); err != nil {
+		return record, err
+	}
+	if err := record.Validate(); err != nil {
+		return HubRecord{}, err
+	}
+	return record, nil
+}
+
+func Remove(path string) error {
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func writeProtectedJSON(path string, value any) error {
+	plain, err := json.Marshal(value)
 	if err != nil {
 		return errors.New("encode secret record failed")
 	}
@@ -79,33 +120,21 @@ func Write(path string, record Record) error {
 	return nil
 }
 
-func Read(path string) (Record, error) {
-	var record Record
+func readProtectedJSON(path string, target any) error {
 	cipher, err := os.ReadFile(path)
 	if err != nil {
-		return record, fmt.Errorf("read secret store: %w", err)
+		return fmt.Errorf("read secret store: %w", err)
 	}
 	defer zero(cipher)
 	plain, err := unprotect(cipher)
 	if err != nil {
-		return record, err
+		return err
 	}
 	defer zero(plain)
-	if err := json.Unmarshal(plain, &record); err != nil {
-		return record, errors.New("secret store payload is invalid")
+	if err := json.Unmarshal(plain, target); err != nil {
+		return errors.New("secret store payload is invalid")
 	}
-	if err := record.Validate(); err != nil {
-		return Record{}, err
-	}
-	return record, nil
-}
-
-func Remove(path string) error {
-	err := os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+	return nil
 }
 
 func protect(data []byte) ([]byte, error) {

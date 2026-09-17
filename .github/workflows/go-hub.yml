@@ -1,0 +1,194 @@
+name: Go Hub CI
+
+on:
+  push:
+    paths:
+      - 'agent/cmd/ai-control-hub/**'
+      - 'agent/internal/hub/**'
+      - 'agent/internal/domain/**'
+      - 'agent/internal/events/event.go'
+      - 'agent/go.mod'
+      - 'agent/go.sum'
+      - 'server/hub/**'
+      - 'server/hub_app.py'
+      - 'tools/hub_backup.py'
+      - 'scripts/backup_hub_db.py'
+      - 'pyproject.toml'
+      - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ai-control-hub-lan-doctor.sh'
+      - 'scripts/ai-control-hub-upgrade.sh'
+      - 'scripts/ci-go-only-hub.sh'
+      - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/ci-hub-lan-doctor-smoke.sh'
+      - 'scripts/ci-hub-upgrade-smoke.sh'
+      - 'scripts/ci-hub-runtime-smoke.py'
+      - 'tools/tests/test_hub_runtime_smoke.py'
+      - 'scripts/hub_bundle.py'
+      - 'scripts/package-hub-bundle.py'
+      - 'scripts/package-h3-validation.py'
+      - 'docs/H3_FIELD_VALIDATION.md'
+      - 'docs/HUB_DEPLOYMENT.md'
+      - 'docs/HUB_LAN_DOCTOR.md'
+      - 'docs/HUB_UPGRADE.md'
+      - 'docs/GO_HUB_MIGRATION.md'
+      - 'docs/HUB_V2_PLAN.md'
+      - '.github/workflows/go-hub.yml'
+  pull_request:
+    paths:
+      - 'agent/cmd/ai-control-hub/**'
+      - 'agent/internal/hub/**'
+      - 'agent/internal/domain/**'
+      - 'agent/internal/events/event.go'
+      - 'agent/go.mod'
+      - 'agent/go.sum'
+      - 'server/hub/**'
+      - 'server/hub_app.py'
+      - 'tools/hub_backup.py'
+      - 'scripts/backup_hub_db.py'
+      - 'pyproject.toml'
+      - 'scripts/ai-control-hub-systemd.sh'
+      - 'scripts/ai-control-hub-lan-doctor.sh'
+      - 'scripts/ai-control-hub-upgrade.sh'
+      - 'scripts/ci-go-only-hub.sh'
+      - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/ci-hub-lan-doctor-smoke.sh'
+      - 'scripts/ci-hub-upgrade-smoke.sh'
+      - 'scripts/ci-hub-runtime-smoke.py'
+      - 'tools/tests/test_hub_runtime_smoke.py'
+      - 'scripts/hub_bundle.py'
+      - 'scripts/package-hub-bundle.py'
+      - 'scripts/package-h3-validation.py'
+      - 'docs/H3_FIELD_VALIDATION.md'
+      - 'docs/HUB_DEPLOYMENT.md'
+      - 'docs/HUB_LAN_DOCTOR.md'
+      - 'docs/HUB_UPGRADE.md'
+      - 'docs/GO_HUB_MIGRATION.md'
+      - 'docs/HUB_V2_PLAN.md'
+      - '.github/workflows/go-hub.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: go-hub-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Enforce Go-only Hub boundary
+        shell: bash
+        run: bash ./scripts/ci-go-only-hub.sh
+
+      - name: Test Hub lifecycle gate negative controls
+        run: python3 -m unittest discover -s tools/tests -p test_hub_runtime_smoke.py -v
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+
+      - name: Vet and test Go Hub
+        working-directory: agent
+        run: |
+          go vet ./internal/hub ./cmd/ai-control-hub
+          go test ./internal/hub ./cmd/ai-control-hub
+
+      - name: Resolve build version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            version="0.0.0-pr.${{ github.event.pull_request.number }}"
+          else
+            version="0.0.0-dev.${GITHUB_SHA:0:12}"
+          fi
+          echo "HUB_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Reproducible static Linux build
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist build-a build-b
+          ldflags="-s -w -buildid= -X main.version=$HUB_VERSION"
+          (
+            cd agent
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o ../build-a/ai-control-hub ./cmd/ai-control-hub
+            go build -trimpath -buildvcs=false -ldflags "$ldflags" -o ../build-b/ai-control-hub ./cmd/ai-control-hub
+          )
+          cmp build-a/ai-control-hub build-b/ai-control-hub
+          cp build-a/ai-control-hub dist/ai-control-hub
+          test "$(dist/ai-control-hub version)" = "$HUB_VERSION"
+          file dist/ai-control-hub
+          file dist/ai-control-hub | grep -Fq 'statically linked'
+          sha256sum dist/ai-control-hub > dist/ai-control-hub.sha256
+
+      - name: Go Hub runtime smoke
+        run: python3 scripts/ci-hub-runtime-smoke.py --hub dist/ai-control-hub
+
+      - name: Validate Go Hub systemd assets
+        shell: bash
+        run: bash ./scripts/ci-hub-deployment-smoke.sh
+
+      - name: Build production Hub bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          output='dist/ai-control-hub-linux-amd64.zip'
+          python3 scripts/package-hub-bundle.py \
+            --hub-binary dist/ai-control-hub \
+            --version "$HUB_VERSION" \
+            --output "$output"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          unzip -q "$output" -d "$tmp"
+          grep -Fxq 'bundle_schema=1' "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'component=ai-control-hub' "$tmp/BUILD_INFO.txt"
+          grep -Fxq "version=$HUB_VERSION" "$tmp/BUILD_INFO.txt"
+          grep -Fxq 'entrypoint=docs/HUB_DEPLOYMENT.md' "$tmp/BUILD_INFO.txt"
+          (cd "$tmp" && sha256sum -c SHA256SUMS)
+
+      - name: Verify historical H3 packager compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/package-h3-validation.py \
+            --hub-binary dist/ai-control-hub \
+            --version "$HUB_VERSION" \
+            --output dist/ai-control-hub-h3-compat.zip
+          unzip -p dist/ai-control-hub-h3-compat.zip BUILD_INFO.txt | grep -Fxq "version=$HUB_VERSION"
+
+      - name: Upload Go Hub binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hub-linux-amd64
+          path: |
+            dist/ai-control-hub
+            dist/ai-control-hub.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload production Hub bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hub-production-bundle
+          path: dist/ai-control-hub-linux-amd64.zip
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload historical H3 compatibility bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hub-h3-validation-bundle
+          path: dist/ai-control-hub-h3-compat.zip
+          if-no-files-found: error
+          retention-days: 90

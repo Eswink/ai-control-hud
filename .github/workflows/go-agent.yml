@@ -7,13 +7,17 @@ on:
       - 'server/tests/fixtures/**'
       - 'scripts/ai-control-agent-systemd.sh'
       - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ai-control-agent-unix-upgrade.sh'
       - 'scripts/ci-agent-runtime-smoke.py'
+      - 'scripts/ci-agent-systemd-identity-smoke.sh'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/ci-g7-unix-service-smoke.sh'
+      - 'scripts/fixtures/broken-service-agent.go'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - 'docs/G7_CROSS_PLATFORM.md'
+      - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-agent.yml'
   pull_request:
     paths:
@@ -21,13 +25,17 @@ on:
       - 'server/tests/fixtures/**'
       - 'scripts/ai-control-agent-systemd.sh'
       - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ai-control-agent-unix-upgrade.sh'
       - 'scripts/ci-agent-runtime-smoke.py'
+      - 'scripts/ci-agent-systemd-identity-smoke.sh'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/ci-g7-unix-service-smoke.sh'
+      - 'scripts/fixtures/broken-service-agent.go'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - 'docs/G7_CROSS_PLATFORM.md'
+      - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-agent.yml'
   workflow_dispatch:
 
@@ -86,7 +94,9 @@ jobs:
         run: |
           bash -n ./scripts/ai-control-agent-systemd.sh
           bash -n ./scripts/ai-control-agent-launchd.sh
+          bash -n ./scripts/ai-control-agent-unix-upgrade.sh
           bash -n ./scripts/ci-g7-unix-service-smoke.sh
+          bash -n ./scripts/ci-agent-systemd-identity-smoke.sh
 
       - name: Native runtime smoke (Windows)
         if: runner.os == 'Windows'
@@ -107,6 +117,11 @@ jobs:
         if: matrix.platform == 'linux-amd64'
         shell: bash
         run: bash ./scripts/ci-g7-unix-service-smoke.sh
+
+      - name: Linux Agent service identity migration smoke
+        if: matrix.platform == 'linux-amd64'
+        shell: bash
+        run: bash ./scripts/ci-agent-systemd-identity-smoke.sh
 
       - name: macOS launchd + SecretStore smoke
         if: matrix.platform == 'darwin-arm64'

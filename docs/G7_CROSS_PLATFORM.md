@@ -1,6 +1,6 @@
 # G7 Cross-platform Runtime and Release
 
-G7 turns the Go desktop agent into a reproducible, host-validated multi-platform release while keeping the Android schema-v1 contract unchanged.
+G7 provides a host-validated multi-platform Go Agent while keeping the Android schema-v1 contract unchanged.
 
 ## Target matrix
 
@@ -9,135 +9,249 @@ G7 turns the Go desktop agent into a reproducible, host-validated multi-platform
 | Windows amd64 | `windows-latest` | validated | Windows SCM validated | DPAPI LocalMachine + protected ACL |
 | Linux amd64 | `ubuntu-latest` | validated | systemd validated | root/user-owned `0600` file in `0700` state directory |
 | macOS arm64 | `macos-15` | validated | LaunchDaemon validated | root/user-owned `0600` file in `0700` state directory |
-| macOS amd64 | `macos-15-intel` | validated | same launchd adapter; runtime tested natively | same Unix permission-protected store |
+| macOS amd64 | `macos-15-intel` | validated | adapter source shared; runtime tested natively | same Unix permission-protected store |
 
-Windows remains the deployment target for the existing Android HUD. Linux/macOS support does not change the phone configuration or API contract.
+Windows remains the real-device deployment target for the current Android HUD. Linux/macOS support does not change the phone API contract.
 
 ## Native runtime validation
 
-`Go Agent CI` runs `go vet`, `go test`, native build, and a real foreground runtime smoke on all four target environments. The smoke creates synthetic ZCode Goal/task-index SQLite databases, starts the native binary, and requires:
+`Go Agent CI` runs `go vet`, `go test`, native build, and a foreground runtime smoke on all four targets. The smoke creates synthetic ZCode Goal/task-index databases, starts the native binary, and requires schema-v1 state, healthy synthetic ZCode data, diagnostics, and graceful termination.
 
-- `schemaVersion == 1`;
-- server version from the Go agent;
-- ZCode health `ok`;
-- one running synthetic Goal;
-- the expected Goal title/activity;
-- graceful process termination, including SIGTERM on Unix.
+This is stronger than cross-compilation: a target is not described as runtime-validated until its native runner executes the collector/API path.
 
-This is intentionally stronger than cross-compilation: a target is not described as runtime-validated until its native runner executes the collector/API path.
+## CommandCode credential rule
 
-## Portable configuration
+CommandCode API keys are supplied explicitly by the operator. The project does not discover, scrape, recover, or auto-retrieve a real key from ZCode, accounts, files, applications, or external services.
 
-`ai-control-agent configure` creates a machine/service configuration without putting the CommandCode API key in that JSON file. `ai-control-agent config get` exposes only selected non-secret configuration fields for platform lifecycle scripts; it never prints the API key.
-
-Example foreground Unix configuration:
+The preferred bootstrap on every supported desktop OS is a temporary one-line file supplied by the operator:
 
 ```bash
-./ai-control-agent configure \
-  --provider-config ~/.local/share/ai-control-hud/commandcode-provider.json \
-  --runtime-db ~/.zcode/cli/db/db.sqlite \
-  --task-index-db ~/.zcode/v2/tasks-index.sqlite \
-  --listen 127.0.0.1:8787
+sudo ./ai-control-agent commandcode configure \
+  --config /etc/ai-control-hud/agent.json \
+  --api-key-file /tmp/commandcode.key
 
-./ai-control-agent run --config ~/.config/ai-control-hud/agent.json
+sudo ./ai-control-agent commandcode status \
+  --config /etc/ai-control-hud/agent.json
 ```
 
-On Windows the service path continues to use DPAPI. On Linux/macOS the SecretStore backend is explicitly **permission-protected rather than encrypted at rest**: the state directory is forced to `0700`, the secret file to `0600`, and `Read` rejects both a group/world-accessible secret file and a group/world-accessible parent state directory. A root service therefore stores the provider record in a root-only file. This distinction is intentional and documented rather than presenting Unix file permissions as cryptographic encryption.
+After service installation and `doctor` validation, delete the temporary plaintext file:
+
+```bash
+rm -f /tmp/commandcode.key
+```
+
+The key itself is never accepted as a command-line literal and is never printed by the Agent.
+
+The older `--provider-config PATH` flow remains available only as an **explicit** compatibility/migration input. Machine/service configuration no longer probes `.local/commandcode-provider.json` or `HUD_ZCODE_CONFIG` implicitly.
+
+## Secret storage and durable outbox boundaries
+
+On Windows, the service path uses machine-scope DPAPI plus protected ACLs.
+
+On Linux/macOS the SecretStore is explicitly **permission-protected rather than encrypted at rest**: the state directory is forced to `0700`, the secret file to `0600`, and reads reject group/world-accessible state. For root service deployments, run `commandcode configure` with `sudo` so the protected record is root-owned.
+
+The machine config contains the SecretStore path, not the API key.
+
+When a protected Hub credential exists, the remote uploader also requires a writable durable SQLite event outbox. Service adapters set `AI_CONTROL_HUB_OUTBOX` explicitly instead of allowing the root service to fall back to a user-config directory that may be read-only under service hardening:
+
+```text
+Linux systemd: /var/lib/ai-control-hud/agent/events.sqlite3
+macOS launchd: <machine-config-directory>/events.sqlite3
+```
+
+The Linux adapter creates only the dedicated `agent` child directory as root `0700`; it does not loosen permissions on an existing `/var/lib/ai-control-hud` parent. Its hardened unit grants `ReadWritePaths` only to the Agent data child. The macOS LaunchDaemon injects the outbox path through `EnvironmentVariables` and uses the already protected machine-config directory.
+
+Normal service removal preserves the outbox for durable event delivery after reinstall. `remove --purge` deletes the outbox database and its `-wal`/`-shm` sidecars. Binary upgrades never rewrite or delete it.
 
 ## Linux systemd
 
-`scripts/ai-control-agent-systemd.sh` manages the Linux adapter:
+`scripts/ai-control-agent-systemd.sh` manages the Linux Agent under the dedicated unit identity:
 
-```bash
-bash scripts/ai-control-agent-systemd.sh install \
-  --agent ./ai-control-agent \
-  --provider-config /path/to/commandcode-provider.json
-
-bash scripts/ai-control-agent-systemd.sh start
-bash scripts/ai-control-agent-systemd.sh status
-bash scripts/ai-control-agent-systemd.sh restart
-bash scripts/ai-control-agent-systemd.sh stop
-bash scripts/ai-control-agent-systemd.sh remove
+```text
+ai-control-agent.service
 ```
 
-On first install the adapter resolves the invoking user's standard ZCode paths (`~/.zcode/cli/db/db.sqlite` and `~/.zcode/v2/tasks-index.sqlite`) **before** entering the root `sudo configure` context. Explicit `--runtime-db` / `--task-index-db` values take precedence. If no source can be found, installation fails with an explicit request for one of those flags instead of silently resolving `/root/.zcode`.
+The Central Hub keeps its independent unit identity:
 
-The installed service runs as root, uses `/usr/local/lib/ai-control-hud/ai-control-agent`, and uses a root-protected config/SecretStore. The unit enables systemd hardening including `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, and read-only home access. `remove` preserves machine state for reversible reinstall; `remove --purge` deletes only the exact config, SecretStore, and installed binary and never recursively deletes an arbitrary config directory. Custom config paths are converted to absolute paths before being persisted into the service definition.
+```text
+ai-control-hub.service
+```
+
+This separation is deliberate: Agent lifecycle commands must never stop, disable, delete, or reset the Central Hub service.
+
+Recommended first install:
+
+```bash
+# Operator creates /tmp/commandcode.key first.
+sudo ./ai-control-agent commandcode configure \
+  --config /etc/ai-control-hud/agent.json \
+  --api-key-file /tmp/commandcode.key
+
+bash ./ai-control-agent-systemd.sh install \
+  --agent ./ai-control-agent
+
+sudo /usr/local/lib/ai-control-hud/ai-control-agent doctor \
+  --config /etc/ai-control-hud/agent.json
+
+rm -f /tmp/commandcode.key
+```
+
+Lifecycle and binary upgrade:
+
+```bash
+bash ./ai-control-agent-systemd.sh start
+bash ./ai-control-agent-systemd.sh status
+bash ./ai-control-agent-systemd.sh restart
+bash ./ai-control-agent-systemd.sh upgrade --agent ./ai-control-agent
+bash ./ai-control-agent-systemd.sh stop
+bash ./ai-control-agent-systemd.sh remove
+```
+
+`upgrade` is binary-only. The candidate must pass `ai-control-agent version` before service downtime. A running service is stopped, the new binary is atomically swapped in, and the service must remain stably active; startup failure restores the previous binary and restarts it. A stopped service remains stopped. Machine config, CommandCode SecretStore, Hub SecretStore, durable event outbox, systemd unit, and configured source paths are not rewritten.
+
+### Historical Linux Agent unit migration
+
+Early cross-platform Agent builds used `ai-control-hud.service`, which later became ambiguous with the Hub product name. The current adapter supports a narrow migration path without guessing ownership.
+
+A historical-name unit is treated as Agent-owned **only** when its sole `ExecStart` exactly has this shape:
+
+```text
+/usr/local/lib/ai-control-hud/ai-control-agent run --config <one-config-argument>
+```
+
+A historical-name unit whose `ExecStart` launches `ai-control-hub` or anything else is non-Agent state and is preserved byte-for-byte by Agent install/remove. Agent lifecycle commands also refuse to fall back to that unit.
+
+When a legacy Agent unit is detected during `install`:
+
+1. if a separate replacement binary was supplied, the existing H28 transactional upgrade helper first validates/swaps it **while the historical Agent unit is still authoritative**;
+2. a bad candidate therefore rolls back its binary and leaves the historical Agent unit running; the new identity is not written;
+3. the new `ai-control-agent.service` unit is written and enabled;
+4. if the historical Agent was active, it is stopped and the new unit must become active before migration commits;
+5. if the new unit cannot become active, it is removed and the historical Agent unit is restarted;
+6. only after successful activation (or immediately for an originally inactive Agent) is the historical Agent unit disabled and removed;
+7. active/inactive state is preserved across the identity migration.
+
+Before migration, `status/start/stop/restart/upgrade` can still operate a recognized historical Agent unit. Once the dedicated unit exists, it always takes precedence.
+
+On first install the adapter resolves the invoking user's standard ZCode paths (`~/.zcode/cli/db/db.sqlite` and `~/.zcode/v2/tasks-index.sqlite`) **before** entering the root `sudo configure` context. Explicit `--runtime-db` / `--task-index-db` values take precedence. If no source can be found, installation fails instead of silently resolving `/root/.zcode`.
+
+The service runs as root from `/usr/local/lib/ai-control-hud/ai-control-agent`. The unit applies `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, read-only home access, and related hardening. `remove` preserves config/SecretStores/outbox for reversible reinstall; `remove --purge` removes the exact Agent machine state, outbox, and installed binary.
 
 ## macOS launchd
 
-`scripts/ai-control-agent-launchd.sh` manages a system LaunchDaemon:
+`scripts/ai-control-agent-launchd.sh` manages the system LaunchDaemon. Its default machine config is:
 
-```bash
-bash scripts/ai-control-agent-launchd.sh install \
-  --agent ./ai-control-agent \
-  --provider-config /path/to/commandcode-provider.json
-
-bash scripts/ai-control-agent-launchd.sh start
-bash scripts/ai-control-agent-launchd.sh status
-bash scripts/ai-control-agent-launchd.sh restart
-bash scripts/ai-control-agent-launchd.sh stop
-bash scripts/ai-control-agent-launchd.sh remove
+```text
+/Library/Application Support/AI Control HUD/agent.json
 ```
 
-Like the Linux adapter, first install resolves the invoking user's standard `.zcode` databases before `sudo`; explicit source flags override discovery. The adapter installs a root LaunchDaemon plist at `/Library/LaunchDaemons/com.aicontrolhud.agent.plist`, runs the stable binary under `/usr/local/lib/ai-control-hud`, and uses the permission-protected platform SecretStore.
+Recommended first install uses the same explicit key bootstrap:
 
-The production adapter has no Python runtime dependency. Its plist is generated with macOS `plutil`, including a real `ProgramArguments` array, so paths with spaces are represented as plist values rather than shell-concatenated command strings.
+```bash
+CONFIG="/Library/Application Support/AI Control HUD/agent.json"
+
+sudo ./ai-control-agent commandcode configure \
+  --config "$CONFIG" \
+  --api-key-file /tmp/commandcode.key
+
+bash ./ai-control-agent-launchd.sh install \
+  --agent ./ai-control-agent
+
+sudo /usr/local/lib/ai-control-hud/ai-control-agent doctor \
+  --config "$CONFIG"
+
+rm -f /tmp/commandcode.key
+```
+
+Lifecycle and binary upgrade:
+
+```bash
+bash ./ai-control-agent-launchd.sh start
+bash ./ai-control-agent-launchd.sh status
+bash ./ai-control-agent-launchd.sh restart
+bash ./ai-control-agent-launchd.sh upgrade --agent ./ai-control-agent
+bash ./ai-control-agent-launchd.sh stop
+bash ./ai-control-agent-launchd.sh remove
+```
+
+The launchd upgrade uses the same transactional file helper as Linux. Running state means the LaunchDaemon is loaded and reports `state = running`; an unloaded daemon is treated as inactive and remains unloaded after upgrade. A candidate that cannot stay running is booted out, the previous binary is restored, and the previous LaunchDaemon is bootstrapped again.
+
+The adapter resolves caller-home ZCode databases before `sudo`, installs a root LaunchDaemon plist at `/Library/LaunchDaemons/com.aicontrolhud.agent.plist`, and uses the same root-protected SecretStore model. The plist injects the durable outbox path next to the machine config.
+
+The plist is generated with macOS `plutil`, including a real `ProgramArguments` array so paths with spaces are represented as plist values rather than shell-concatenated command strings.
 
 ## Unix service validation
 
-Native CI runs a service + SecretStore smoke on Ubuntu and macOS arm64. It uses synthetic ZCode data and a non-production provider credential, then exercises:
+Native CI runs service + SecretStore smoke on Ubuntu and macOS arm64. Current shared validation exercises:
 
-1. configure/import;
-2. service install;
-3. SecretStore permission check (`0600`);
-4. start and ZCode `ok`;
-5. restart and recovery;
-6. stop;
-7. remove while preserving config/secret;
-8. delete the plaintext provider import;
-9. reinstall from the preserved SecretStore **without** a listen override;
-10. verify the previous custom listen value is preserved;
-11. start/stop again;
-12. final purge.
+1. create synthetic operator-owned CommandCode and Hub token files;
+2. create protected CommandCode and Hub SecretStores under root;
+3. install the systemd/launchd service **without** `--provider-config`;
+4. verify SecretStore mode `0600`, ZCode path discovery, and `doctor`;
+5. delete the plaintext credential files;
+6. start/restart the service with protected Hub configuration enabled and require the service-owned durable event outbox to be created;
+7. perform a running-state transactional upgrade and require healthy schema-v1 state afterward;
+8. upgrade to a fixture that passes `version` but cannot remain a service, require non-zero result, automatic binary rollback, previous service recovery, and healthy schema-v1 state;
+9. stop the service, perform an inactive upgrade, and require it to remain inactive/unloaded;
+10. require byte-identical machine config, CommandCode SecretStore, and Hub SecretStore across all upgrade/rollback operations;
+11. require the durable outbox to survive upgrades, rollback, normal remove, and reinstall;
+12. require no `.upgrade.new` or `.upgrade.bak` scratch files after success or successful rollback;
+13. remove while preserving machine config/SecretStores/outbox;
+14. reinstall with no provider file and no listen override;
+15. verify the previous custom listen value and protected credentials are preserved;
+16. start/stop again, remove the independent Hub credential, and verify final service purge deletes the outbox database/WAL/SHM.
 
-The Linux systemd flow and macOS arm64 LaunchDaemon flow have both been exercised successfully on native GitHub-hosted runners. macOS Intel independently runs the full native foreground collector/API suite against the same Go packages and launchd adapter source.
+Linux CI additionally runs a dedicated service-identity migration smoke that proves:
+
+- a legacy-name **Hub** unit is not modified, disabled, stopped, reset, or deleted by Agent install/remove;
+- an inactive historical Agent unit migrates to `ai-control-agent.service` and remains inactive;
+- an active historical Agent with a bad candidate keeps its old unit, old binary, protected state, outbox, and healthy schema-v1 service after transactional rollback;
+- a good active historical Agent migrates to the dedicated unit and remains active/healthy;
+- protected machine config, CommandCode SecretStore, Hub SecretStore, and durable outbox survive identity migration.
+
+This proves service reinstall/binary upgrade/identity migration do not depend on recoverable plaintext credential files and that enabling the remote Hub uploader remains compatible with Unix service hardening.
 
 ## Reproducible release pipeline
 
-`Go Agent Release` produces:
+The unified Go release pipeline builds the Agent for:
 
-- `windows/amd64` ZIP;
-- `linux/amd64` tar.gz;
-- `darwin/amd64` tar.gz;
-- `darwin/arm64` tar.gz.
+- `windows/amd64`;
+- `linux/amd64`;
+- `darwin/amd64`;
+- `darwin/arm64`.
 
-For every target the workflow:
+For every Agent target it forces `CGO_ENABLED=0`, builds twice with deterministic Go flags, byte-compares binaries, packages with deterministic metadata, and records SHA-256.
 
-1. forces `CGO_ENABLED=0`;
-2. builds the same target twice with `-trimpath`, `-buildvcs=false`, a cleared Go build ID, and an injected version;
-3. byte-compares the two binaries;
-4. packages with deterministic timestamps/ownership/mode metadata;
-5. writes a per-target SHA-256 file;
-6. combines all target hashes into `SHA256SUMS`.
+Archive contents are platform-specific:
 
-Pull requests execute this release build without publishing. `workflow_dispatch` creates downloadable CI artifacts. A `v*` tag additionally creates a GitHub Release.
+```text
+windows-amd64.zip
+  ai-control-agent.exe
 
-Workflow permissions are separated by responsibility: build/manifest jobs are read-only; the provenance job alone receives OIDC/attestation/artifact-metadata write permissions; the tag publishing job alone receives repository contents write permission.
+linux-amd64.tar.gz
+  ai-control-agent
+  ai-control-agent-systemd.sh
+  ai-control-agent-unix-upgrade.sh
 
-## Artifact signing / provenance
+darwin-*.tar.gz
+  ai-control-agent
+  ai-control-agent-launchd.sh
+  ai-control-agent-unix-upgrade.sh
+```
 
-G7 uses GitHub artifact attestations (`actions/attest`) for manual/tag release runs. This provides signed Sigstore build provenance for the release archives and checksum manifest.
+The release workflow extracts every archive during PR CI and requires those exact service/upgrade assets with executable mode on Unix. The package builder fixes archive timestamps, ownership, ordering, and permissions so adding the service assets does not weaken reproducibility.
 
-This is **not** Windows Authenticode signing and is **not** Apple Developer ID signing/notarization. Those require external platform certificates/identities that are not stored in this repository. Releases must not claim Authenticode/notarization unless those credentials and platform-specific signing stages are explicitly added later.
+The same release set also includes the standalone Linux/amd64 Go Hub, production Hub bundle, unified checksums, provenance/attestation on eligible release runs, and the machine-readable release manifest.
+
+Artifact attestation is not Windows Authenticode or Apple Developer ID/notarization. Those require external platform identities and must not be claimed unless explicit platform-signing stages are added.
 
 ## Support claims
 
-The project distinguishes these levels:
+The project distinguishes:
 
-- **cross-built**: a target binary compiled;
-- **native runtime validated**: native CI executed the ZCode + HTTP path;
-- **service validated**: native CI exercised the platform service adapter and SecretStore lifecycle;
-- **target-machine validated**: the actual deployment machine/device completed the final operational gate.
+- **cross-built** — binary compiled;
+- **native runtime validated** — native CI executed collector/API behavior;
+- **service validated** — native CI exercised service adapter + SecretStore/outbox lifecycle, including transactional upgrades on Linux/macOS arm64 and Linux historical-unit identity migration;
+- **target-machine validated** — real deployment hardware completed the field gate.
 
-G7 CI establishes the first three levels for the supported matrix above. The existing Windows/Android deployment is only considered fully complete after the final target-machine validation requested at the end of the iteration cycle.
+The current CI establishes the first three levels across the supported matrix, with native service lifecycle validation on Windows, Linux amd64, and macOS arm64. Real Windows + Android core deployment has separately passed the accepted field path documented in the Central Hub roadmap.
