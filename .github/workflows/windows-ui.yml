@@ -91,6 +91,10 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw 'synthetic credential marker was not detected'
           }
+          # The scanner's non-zero exit is expected for this synthetic probe.
+          # Reset PowerShell's native-command status so the successful proof step
+          # does not itself fail the workflow.
+          $global:LASTEXITCODE = 0
           Remove-Item -LiteralPath $probe -Force
           Write-Host '[windows-ui-artifact-scan] synthetic failure path verified'
 
