@@ -5,7 +5,15 @@
     <string name="backend_server">Backend server</string>
     <string name="server_hint">auto.lan or 192.168.101.103:8787</string>
     <string name="action_connect">CONNECT</string>
-    <string name="dashboard_title">AI CONTROL</string>
+    <string name="dashboard_title">AI Control HUD</string>
+    <string name="dashboard_subtitle">Agent monitor · local device</string>
+    <string name="connection_card_title">Connection</string>
+    <string name="zcode_card_title">ZCode tasks</string>
+    <string name="zcode_card_subtitle">Current work and task health</string>
+    <string name="task_list_title">Task details</string>
+    <string name="command_card_title">CommandCode</string>
+    <string name="command_card_subtitle">Plan, credit, and usage windows</string>
+    <string name="voice_card_subtitle">Local TTS notification policy</string>
     <string name="section_zcode">ZCODE</string>
     <string name="section_command_code">COMMAND CODE</string>
     <string name="section_voice_alerts">VOICE ALERTS</string>
