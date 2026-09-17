@@ -303,6 +303,7 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 					break
 				}
 			}
+		}
 		if activity != nil {
 			break
 		}
