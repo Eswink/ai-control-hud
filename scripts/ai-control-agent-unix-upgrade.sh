@@ -4,7 +4,7 @@ set -euo pipefail
 MANAGER=""
 CANDIDATE=""
 BINARY_PATH="${AI_CONTROL_AGENT_BINARY_PATH:-/usr/local/lib/ai-control-hud/ai-control-agent}"
-SYSTEMD_SERVICE="${AI_CONTROL_AGENT_SYSTEMD_SERVICE:-ai-control-hud.service}"
+SYSTEMD_SERVICE="${AI_CONTROL_AGENT_SYSTEMD_SERVICE:-ai-control-agent.service}"
 LAUNCHD_LABEL="${AI_CONTROL_AGENT_LAUNCHD_LABEL:-com.aicontrolhud.agent}"
 LAUNCHD_PLIST="${AI_CONTROL_AGENT_LAUNCHD_PLIST:-/Library/LaunchDaemons/com.aicontrolhud.agent.plist}"
 SYSTEMCTL_BIN="${AI_CONTROL_AGENT_SYSTEMCTL:-systemctl}"
