@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ANDROID_MAIN = ROOT / "android" / "app" / "src" / "main"
 RES = ANDROID_MAIN / "res"
 MAIN_ACTIVITY = ANDROID_MAIN / "java" / "dev" / "eswink" / "aicontrolhud" / "MainActivity.java"
+DISPLAY_POLICY = ANDROID_MAIN / "java" / "dev" / "eswink" / "aicontrolhud" / "DisplayPolicy.java"
+DESK_DISPLAY_SWITCH = ANDROID_MAIN / "java" / "dev" / "eswink" / "aicontrolhud" / "DeskDisplaySwitch.java"
 MANIFEST = ANDROID_MAIN / "AndroidManifest.xml"
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 
@@ -84,15 +86,23 @@ def check_landscape_focus() -> None:
         "failedVoiceSwitch",
         "quietHoursSwitch",
         "testVoiceButton",
+        "deskDisplaySwitch",
     }
     missing = sorted(required - ids)
     if missing:
         fail("landscape focus layout is missing bound views: " + ", ".join(missing))
 
     text = path.read_text(encoding="utf-8")
-    for required_string in ("@string/focus_command_remaining", "@string/focus_current_task", "@string/focus_tts_status"):
+    for required_string in (
+        "@string/focus_command_remaining",
+        "@string/focus_current_task",
+        "@string/focus_tts_status",
+        "@string/desk_display_keep_awake",
+    ):
         if required_string not in text:
             fail(f"landscape focus layout is missing {required_string}")
+    if "dev.eswink.aicontrolhud.DeskDisplaySwitch" not in text:
+        fail("landscape focus layout must use the scoped DeskDisplaySwitch")
 
 
 def check_catalogs() -> None:
@@ -134,13 +144,40 @@ def check_manifest_rotation() -> None:
     fail("MainActivity is missing from AndroidManifest.xml")
 
 
+def check_desk_display_policy() -> None:
+    if not DISPLAY_POLICY.is_file() or not DESK_DISPLAY_SWITCH.is_file():
+        fail("desk-display policy and switch implementation are required")
+
+    policy = DISPLAY_POLICY.read_text(encoding="utf-8")
+    if "windowVisible && landscape && deskDisplayEnabled" not in policy:
+        fail("keep-awake policy must require visible + landscape + enabled")
+
+    switch = DESK_DISPLAY_SWITCH.read_text(encoding="utf-8")
+    required_tokens = (
+        "getWindowVisibility() == View.VISIBLE",
+        "Configuration.ORIENTATION_LANDSCAPE",
+        "DisplayPolicy.shouldKeepScreenOn",
+        "onDetachedFromWindow()",
+        "setKeepScreenOn(false)",
+    )
+    for token in required_tokens:
+        if token not in switch:
+            fail(f"DeskDisplaySwitch is missing lifecycle guard {token!r}")
+    if "FLAG_KEEP_SCREEN_ON" in switch:
+        fail("DeskDisplaySwitch must not set a permanent Window keep-screen-on flag")
+
+
 def main() -> int:
     check_layouts()
     check_landscape_focus()
     check_catalogs()
     check_activity()
     check_manifest_rotation()
-    print("[android-ui-resources] PASS localized-resources=literals-free landscape=focus lifecycle-guard=present")
+    check_desk_display_policy()
+    print(
+        "[android-ui-resources] PASS localized-resources=literals-free landscape=focus "
+        "lifecycle-guard=present desk-display=scoped"
+    )
     return 0
 
 
