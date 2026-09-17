@@ -207,7 +207,16 @@ case "$ACTION" in
     fi
 
     sudo install -d -m 0755 "$INSTALL_DIR"
-    sudo install -m 0755 "$agent_abs" "$INSTALL_DIR/ai-control-agent"
+    if [[ "$legacy_agent" -eq 1 ]]; then
+      [[ -f "$UPGRADE_HELPER" ]] || { echo "Unix upgrade helper is missing next to adapter: $UPGRADE_HELPER" >&2; exit 1; }
+      installed_agent="$INSTALL_DIR/ai-control-agent"
+      if [[ "$agent_abs" != "$installed_agent" ]]; then
+        echo "[systemd] transactionally validating replacement binary on historical Agent service"
+        AI_CONTROL_AGENT_SYSTEMD_SERVICE="$LEGACY_SERVICE_NAME" bash "$UPGRADE_HELPER" --manager systemd --agent "$agent_abs"
+      fi
+    else
+      sudo install -m 0755 "$agent_abs" "$INSTALL_DIR/ai-control-agent"
+    fi
     sudo install -d -o root -g root -m 0700 "$AGENT_DATA_DIR"
 
     configure=(sudo "$INSTALL_DIR/ai-control-agent" configure --config "$config_abs")
