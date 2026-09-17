@@ -1,354 +1,610 @@
-# AI Control HUD — Agent UI Design Plan v1
+# AI Control HUD — Agent UI & Long-Running Reliability Plan v2
 
-Status: design baseline / implementation planning
-Scope: Windows Agent UI + Android Agent-monitor UI only. Central Hub administration UI is explicitly out of scope.
+Status: revised architecture / implementation planning  
+Scope: Windows Agent UI + Android Agent-monitor UI + Agent/Hub long-running resource and storage hardening. Hub administration UI remains out of scope.
 
-## 1. Reference screens
+## 0. Revision summary
 
-The approved visual direction is represented by three reference images:
+V2 changes the implementation priority after the operator established three additional requirements:
 
-| Reference | File | Intent |
-|---|---|---|
-| Windows Agent | `windows-agent-reference.png` | Full operational desktop dashboard |
-| Android portrait | `android-portrait-agent-reference.png` | Detailed mobile dashboard and TTS controls |
-| Android landscape | `android-landscape-agent-reference.png` | Focus mode: CommandCode remaining quota + current task |
+1. Windows UI must be as native as practical and avoid WebView/Electron-class memory overhead.
+2. Windows, Android, Agent service, and CentOS Hub must be designed for low idle CPU and low steady memory.
+3. Memory/resource leaks must be treated as release-blocking regressions, especially for Windows Agent/UI and the always-on Hub.
+4. Hub SQLite data growth must be bounded with an explicit retention and maintenance policy.
 
-The images are visual references, not literal data contracts. Example values in the images are synthetic. Implementation must never fabricate missing source values.
+The three approved reference images remain the visual target, but they no longer determine the technology stack.
 
-## 2. Product principles
+---
 
-1. **Glance first.** A user should understand Agent status, current work, and CommandCode budget in 1–2 seconds.
-2. **Health and data are separate.** `stale` retains last trustworthy data; `error`/`disabled` must never render fake zero/empty values.
-3. **Portrait = detail, landscape = focus.** Landscape is intentionally sparse and optimized as a desk-side status display.
-4. **Agent only.** The UI may show Hub connectivity/resolved address but must not become a Hub administration console.
-5. **Credentials stay invisible.** Never render CommandCode API keys, Hub tokens, Authorization headers, DPAPI/SecretStore contents, or full private source paths.
-6. **Service and UI lifecycles stay separate.** Closing the PC UI must not stop the Windows Agent service.
-7. **Internationalized from the first implementation.** Simplified Chinese is a first-class locale; English is the fallback locale.
-8. **Old-phone friendly.** Android remains API 23 compatible and should avoid heavyweight visual effects or permanent high-frequency animation.
-
-## 3. Design language
-
-### Color semantics
-
-- App background: `#07111B`
-- Elevated surface: `#0D2131`
-- Secondary surface: `#102A3D`
-- Border/divider: `#173D55`
-- Primary cyan: `#27B9FF`
-- Accent teal: `#22E0CF`
-- Healthy/live green: `#2EE6A6`
-- Warning/stale amber: `#F6C453`
-- Failure/error red: `#FF6B72`
-- Primary text: `#F4F8FC`
-- Secondary text: `#A9B8C7`
-- Muted text: `#71869A`
-
-Color is never the only state signal; every health color is paired with a text label/icon.
-
-### Typography
-
-- Windows: system `Segoe UI Variable` / `Microsoft YaHei UI` fallback.
-- Android: system sans-serif / system CJK font; do not bundle custom font files.
-- Hero metric: 32–48sp/dp-equivalent depending on screen class.
-- Card title: 16–20sp.
-- Body/status text: 13–16sp.
-
-### Geometry
-
-- Card radius: 14–18dp.
-- Desktop spacing grid: 8px base, 16–24px card padding.
-- Android spacing grid: 4dp base, 12–20dp card padding.
-- Shadows/glow remain subtle; no constant animated glow.
-
-## 4. Canonical state mapping
-
-### Overall status
-
-- `live` -> `运行中 / Live`
-- `degraded` -> `状态降级 / Degraded`
-- Hub reachable + state HTTP 503 -> `等待 Agent / Waiting for Agent`
-- Transport failure -> `离线 / Offline`
-- Other HTTP failure -> `服务器错误 / Server error`
-- Unsupported schema -> `版本不兼容 / Schema error`
-
-### Source health
-
-- `ok` -> green `健康`
-- `stale` -> amber `数据过期`
-- `error` -> red `数据不可用`
-- `disabled` -> gray `未启用`
-
-When health is `error` or `disabled`, UI shows `暂无可信数据 / No trustworthy data`, never 0 quota or an empty task list pretending to be valid.
-
-### Current task selection
-
-UI implementation should deterministically select:
-
-1. most recently updated `running` task;
-2. otherwise most recently updated `waiting` task;
-3. otherwise no current task.
-
-The schema currently exposes task title/workspace/activity/duration/changes. It does **not** expose a distinct canonical "goal" field. Therefore the reference mock's `当前目标` must not be fabricated. V1 should use `当前任务` + `当前活动`; a separate goal can be introduced only if a future verified source field is added.
-
-### CommandCode hero metric
-
-Priority for the large remaining indicator:
-
-1. if `credit.remaining` + `credit.limit` are present, show remaining / limit with the real `unit`;
-2. otherwise show the most useful available usage window as remaining percentage (`100 - usedPercent`), clearly labeled `5H` or `Weekly`;
-3. otherwise show `额度数据不可用` without synthesizing zero.
-
-Reset times and both 5H/weekly windows belong in portrait/desktop detail, not the landscape hero view.
-
-## 5. Windows Agent UI
-
-### 5.1 Recommended architecture
-
-Keep `ai-control-agent.exe` as the Windows service/CLI. Add a separate per-user process:
+## 1. Product architecture stays separated
 
 ```text
-ai-control-agent-ui.exe
-    -> local Agent HTTP API (/state, /health, /diagnostics)
-    -> Hub read-only event API when available
-    -> existing ai-control-agent.exe CLI for privileged service actions
+Windows interactive session
+  ai-control-agent-ui.exe       native desktop UI
+          |
+          | local read-only HTTP + explicit elevated CLI actions
+          v
+Windows Session 0
+  ai-control-agent.exe          Go service / collectors / uploader
+          |
+          | outbound state + heartbeat + durable events
+          v
+CentOS
+  ai-control-hub                Go daemon + SQLite
+          |
+          | schema-v1 state/events
+          v
+Android
+  native Java/XML HUD
 ```
 
-Recommended UI shell: **Wails (Go backend + HTML/CSS/TypeScript frontend)**, because it keeps Go integration simple while matching the high-fidelity reference screen. The UI process runs in the interactive user session; the service remains in SCM/Session 0.
+Rules:
 
-Privileged actions such as start/stop/restart/upgrade should use the existing CLI path and request UAC elevation only when needed. Read-only dashboard operation must never require elevation.
+- UI failure must never stop collection/upload.
+- Hub remains headless; no Hub administration GUI is added.
+- Closing Windows UI does not stop the Agent service.
+- Android remains a viewer/notification client, not a credential holder.
+- Credentials/private paths never appear in UI or telemetry.
 
-### 5.2 Desktop navigation
+---
 
-- Dashboard
-- Sources
-- Events
-- Diagnostics
-- Settings
+## 2. Resource philosophy
 
-System tray icon should expose: Open Dashboard, Agent status, Restart service (elevated), Exit UI. Exiting the UI does not stop the Agent.
+### 2.1 No permanent animation loop
 
-### 5.3 Dashboard information hierarchy
+No surface is allowed to run a 30/60 FPS render loop while data is unchanged.
 
-Top summary:
-- Agent state/freshness
-- Windows service state
-- Hub sync state
-- logical + resolved Hub address
+- Windows repaints only on `WM_PAINT`, data change, resize, hover/focus, or a short transition.
+- Android uses normal View invalidation only when state changes.
+- Progress rings are static drawings, not continuously rotating indicators.
+- Success/failure transitions may animate briefly (target <= 1.5 s), then stop.
 
-Main content:
-- Current task/activity (largest work panel)
-- ZCode health/summary
-- CommandCode plan/credit/windows
-- Recent events from Hub when reachable
+### 2.2 Adaptive polling
 
-Side diagnostics:
-- Agent version / schema
-- Agent uptime
-- per-source adapter/status/observed age/last-success age/schema support
-- last successful Hub resolution/upload status when available
+Polling is based on visibility, not process lifetime.
 
-Reference-only fields such as exact outbox count/upload queue count are **phase-2** unless a sanitized local API field is added. Do not read internal SQLite files directly from the UI just to fill a card.
+Suggested initial policy:
 
-### 5.4 Desktop quick actions
+| Client state | State refresh | Diagnostics/event refresh |
+|---|---:|---:|
+| Android foreground portrait | 2 s | event feed 2–5 s |
+| Android foreground landscape focus | 2 s | event/TTS secondary 5 s |
+| Android background | stopped | stopped |
+| Windows UI visible | 2 s | diagnostics 5 s |
+| Windows UI minimized/hidden to tray | 15–30 s health only | detail polling stopped |
+| Windows UI exited | none | none |
 
-Phase 1:
-- Open logs/documented log directory
-- Test local health
-- Re-resolve/display Hub
-- Open settings
+The Agent service and Hub continue independently.
 
-Phase 2 (UAC):
-- Start / Stop / Restart Agent service
-- Transactional Agent upgrade
+### 2.3 Release-build budgets
 
-Destructive actions such as credential removal or purge should stay outside the dashboard and require a separate confirmation flow.
+Absolute memory varies by OS, but we define soft budgets plus regression limits. First implementation records baselines; later CI enforces the measured values.
 
-### 5.5 Optional compact desktop mode
+Initial targets (release builds, after warm-up):
 
-A later "Mini HUD" window can show only:
-- Agent state
-- current task/activity
-- CommandCode remaining credit/window
+| Process | Soft steady-memory target | Idle / steady CPU target |
+|---|---:|---:|
+| Windows native UI | <= 48 MiB working set | ~0% hidden, <1% visible average |
+| Windows Go Agent | <= 96 MiB working set | <1% when collectors are idle/steady |
+| CentOS Go Hub | <= 96 MiB RSS | <1% at normal one-agent/one-phone load |
+| Android portrait | <= 96 MiB PSS | no continuous animation; low single-digit CPU |
+| Android landscape focus | <= portrait PSS | no continuous animation; low single-digit CPU |
 
-It can support always-on-top and remember window placement. This should be a later iteration, not mixed into the first desktop build.
+A build is considered suspicious even below the absolute limit if, after warm-up, memory/handle/goroutine count shows a sustained upward trend during a soak test.
 
-## 6. Android portrait UI
+---
 
-Portrait is the **detailed mobile dashboard** matching `android-portrait-agent-reference.png`.
+## 3. Windows GUI — revised native-first architecture
 
-Order:
-1. App header + settings
-2. AUTO/resolved server card + connection state
-3. Overall Agent status/freshness
-4. ZCode task card
-5. CommandCode plan/credit/windows card
-6. Recent durable events
-7. TTS controls
-8. App/cursor/version diagnostics
+### 3.1 Technology decision
 
-The existing 2-second state polling and durable event cursor semantics remain unchanged.
+**Do not use Wails, Electron, WebView2, Qt WebEngine, or another embedded browser for the production Windows UI.**
 
-### Simplification rule
+Primary implementation target:
 
-Settings should not dominate the main dashboard. Server configuration, quiet-hour details, language override, and advanced diagnostics should move into a settings/detail view while the dashboard keeps only the most commonly inspected controls.
+- C++20
+- classic Win32 window/message loop
+- Direct2D for cards/progress/status graphics
+- DirectWrite for text
+- Windows Imaging Component only if an image asset is unavoidable
+- WinHTTP for localhost HTTP
+- native NotifyIcon/system tray
+- ShellExecute/UAC for privileged service actions
+- system Segoe UI / Microsoft YaHei UI fonts; no bundled font runtime
 
-## 7. Android landscape UI
+Why:
 
-Landscape is a **focus display**, matching `android-landscape-agent-reference.png`.
+- no browser runtime;
+- no .NET/Windows App SDK requirement for the main UI path;
+- event-driven idle behavior;
+- small working set;
+- direct control over rendering and lifetime;
+- native tray/UAC/window behavior.
 
-Only three visual layers:
+WinUI 3/C++ may be reconsidered only if a measured prototype stays inside the same memory/CPU envelope. It is not the default because Windows App SDK/XAML adds runtime overhead.
 
-1. slim header + AUTO/resolved Hub + connection indicator;
-2. two hero cards occupying almost the full screen:
-   - CommandCode remaining plan/quota;
-   - current task/activity + running state;
-3. one low-emphasis footer strip for TTS ready / warning state.
+### 3.2 Memory ownership rules
 
-Do not show the full event list, full settings, all usage windows, app info, or task counters in landscape.
+Native UI code must follow strict ownership rules:
 
-Landscape tap behavior:
-- tap CommandCode hero -> quota/5H/weekly detail overlay;
-- tap task hero -> task detail overlay;
-- tap server header -> connection detail;
-- tap TTS footer -> voice settings.
+- no owning raw pointers;
+- no application-level `new/delete` pairs when RAII containers/smart pointers can own the object;
+- COM objects held with `Microsoft::WRL::ComPtr` or an equivalent RAII wrapper;
+- Win32 `HANDLE`, WinHTTP handles, registry keys, icons, brushes, timers and wait handles wrapped in deterministic destructors;
+- one explicit owner for every HWND child/control model;
+- no static object may retain an HWND, callback, network request, or view-model after window destruction;
+- timers are cancelled before window/model teardown;
+- worker results carry a generation/cancellation token so a closed window cannot receive stale callbacks;
+- Direct2D device-dependent resources are released on device loss and window destruction.
 
-### Old-phone / desk-display behavior
+### 3.3 Rendering strategy
 
-- Keep screen on only while the dashboard is foreground and user enabled "桌面显示模式".
-- Optional dim-after-idle mode to reduce OLED/LCD retention and heat.
-- Avoid continuously animated rings; refresh on data change/poll only.
+- One UI thread.
+- Network/JSON work on a small bounded worker (normally one worker thread).
+- UI receives immutable view-state snapshots.
+- Compare new and old view-state; invalidate only changed cards when practical.
+- No timer exists only for visual animation.
+- No large bitmap background; cards/gradients are drawn procedurally.
+- Reuse text formats, brushes and geometry; do not recreate them each frame.
 
-## 8. Android implementation strategy
+### 3.4 Windows leak/regression gates
 
-Keep the existing Java/XML/API-23 stack; do not introduce Compose for this redesign.
+CI / test harness should cover:
 
-### Resource refactor
+- create/destroy the main window repeatedly (target 200–500 cycles);
+- open/close each detail/settings dialog repeatedly;
+- repeated state refreshes (10k+ synthetic updates);
+- service-action cancellation/error paths;
+- WinHTTP request timeout/cancel paths;
+- working-set/private-bytes trend after warm-up;
+- process handle count;
+- USER/GDI object count (`GetGuiResources`);
+- optional Application Verifier / page heap job for nightly CI;
+- MSVC AddressSanitizer for testable native modules where supported;
+- `/analyze` / static analysis warnings treated seriously.
 
-Create:
+The Windows UI is restartable and disposable by design; no data durability depends on it.
+
+---
+
+## 4. Windows Agent service — long-running resource rules
+
+The Go Agent remains the collector/service.
+
+### 4.1 Leak prevention
+
+Every long-lived component must have a bounded lifecycle:
+
+- goroutines owned by a `context.Context`;
+- every ticker has `Stop()`;
+- every SQL `Rows` is closed;
+- response bodies/connections are closed;
+- retries use bounded timers/backoff, not unbounded goroutine spawning;
+- channels/queues have fixed or externally bounded capacity;
+- no unbounded in-memory history.
+
+### 4.2 Local SQLite growth
+
+Current local event DB contains:
+
+- `event_outbox`: pending terminal events; successful upload removes rows;
+- `task_state`: durable task baseline; one row per observed task;
+- tiny metadata.
+
+Policy:
+
+1. **Outbox is never silently dropped.** Reliability is more important than hiding disk pressure.
+2. Add diagnostics for outbox row count + file/WAL bytes.
+3. Warning thresholds are configurable (initial suggestion: 10k pending rows or 50 MiB).
+4. A high-water safety threshold may mark Agent health degraded, but should not invent successful delivery.
+5. Add conservative `task_state` compaction for terminal tasks not seen for a long period (proposed default 180 days), only after a regression test proves it cannot replay recent terminal events.
+6. SQLite free pages may be reused; do not run frequent VACUUM from the Agent service.
+
+---
+
+## 5. Android — low-resource native UI
+
+### 5.1 Technology
+
+Keep:
+
+- Java
+- Android framework Views/XML
+- API 23 minimum
+
+Do not introduce Compose, WebView, Flutter, React Native, or a permanent animation library for this redesign.
+
+Prefer framework `FrameLayout`, `LinearLayout`, `TextView`, `ProgressBar`, `Switch`, custom lightweight `View` only when necessary.
+
+### 5.2 Important correction to current behavior
+
+The current Activity always applies `FLAG_KEEP_SCREEN_ON`. V2 removes this unconditional behavior.
+
+- Portrait normal dashboard: screen follows normal Android policy.
+- Landscape Focus Mode: optional `桌面显示模式` may keep screen on only while that setting is enabled and the Activity is foreground.
+- Optional dim-after-idle behavior can reduce heat and panel retention.
+
+### 5.3 Android leak rules
+
+- no static `Activity`, `View`, `Context` (except application context) or listener ownership;
+- all `Handler` callbacks removed on stop/destroy as appropriate;
+- `onDestroy()` removes callbacks/messages, shuts down TTS, and shuts down/cancels executor work;
+- network result callbacks carry an Activity generation token; results from the pre-rotation Activity are discarded;
+- every `HttpURLConnection` is disconnected in `finally`;
+- connect/read timeouts remain bounded;
+- no unbounded event/task list in memory;
+- orientation recreation must not create duplicate poll loops;
+- no `Timer`/thread survives Activity destruction;
+- TTS listener does not retain an obsolete Activity;
+- drawables are XML/vector/procedural where possible; avoid large bitmaps.
+
+### 5.4 Connection efficiency
+
+Current requests are bounded by 2.5 s connect/read timeouts and disconnect in `finally`, which is good for leak safety. During UI implementation, benchmark whether forcing `Connection: close` is still desirable; allowing platform keep-alive may reduce repeated TCP setup CPU while still keeping each request object scoped and disconnected.
+
+### 5.5 Android memory checks
+
+Automated/emulator gates where practical:
+
+- 100+ portrait/landscape rotations;
+- repeatedly enter/leave settings/detail overlays;
+- 10k synthetic state renders;
+- TTS init/shutdown repetition;
+- connectivity fail/recover loops;
+- verify one active polling loop only;
+- sample PSS/native heap/Java heap before and after warm-up cycles;
+- fail on a clear monotonic leak, not ordinary GC saw-tooth behavior.
+
+---
+
+## 6. Hub SQLite — current growth analysis
+
+Current Hub schema behavior:
+
+- `agents`: one row per agent -> bounded for the current deployment;
+- `snapshots`: one row per agent via UPSERT -> bounded;
+- `events`: append-only terminal event log -> **unbounded today**;
+- WAL: bounded only by normal SQLite checkpoint behavior and reader activity.
+
+Therefore the long-term storage risk is not normal state polling; it is retained event history (plus backups if an operator accumulates them indefinitely).
+
+---
+
+## 7. Hub retention policy
+
+### 7.1 Proposed defaults
+
+Add configurable retention settings; proposed starting values:
 
 ```text
-res/layout/activity_main.xml          portrait/detail
-res/layout-land/activity_main.xml     landscape/focus
-res/values/colors.xml
-res/values/dimens.xml
-res/values/styles.xml
-res/values/strings.xml                English fallback
-res/values-zh-rCN/strings.xml         Simplified Chinese
-res/drawable/...                      card/vector/shape assets
+HUD_HUB_EVENT_RETENTION_DAYS=90
+HUD_HUB_EVENT_RETENTION_MIN=10000
+HUD_HUB_EVENT_RETENTION_MAX=100000
+HUD_HUB_MAINTENANCE_INTERVAL_HOURS=6
 ```
 
-Remove hard-coded UI strings from Java/XML. Locale follows the OS by default; an explicit language override can be added later.
+Meaning:
 
-### Orientation
+- normally retain 90 days;
+- never prune below the newest 10k events solely because they are old;
+- prevent unlimited growth by retaining at most roughly 100k events under unusually high volume;
+- values remain configurable for operators who want longer history.
 
-Remove the current manifest portrait lock. Allow normal Activity recreation on orientation change so Android selects `layout` vs `layout-land`. Persist only durable user settings/cursor; refresh state immediately after recreation.
+The exact defaults should be validated against a synthetic size benchmark before freezing the release contract.
 
-### Rendering layer
+### 7.2 Batched pruning
 
-Refactor `MainActivity` into small render helpers/view-state objects instead of expanding one large method. Suggested pieces:
+Never delete a huge history in one transaction.
 
-- `ConnectionViewState`
-- `AgentStatusViewState`
-- `TaskViewState`
-- `CommandCodeViewState`
-- `VoiceViewState`
-- `EventViewState`
+- add an index suitable for retention scans, e.g. `(agent_id, received_at, seq)`;
+- delete in small batches (e.g. 500–1000 rows);
+- yield between batches;
+- maintenance runs outside request critical sections where possible;
+- failures are logged and retried later; they do not stop the Hub.
 
-Keep parsing/domain semantics separate from presentation formatting.
+### 7.3 Cursor correctness after pruning
 
-## 9. Internationalization
+Retention must not silently pretend that an old Android cursor still has complete history.
 
-### Android
+Extend the event-page response with optional retention metadata while keeping schema v1 forward compatible, for example:
 
-- `values/strings.xml`: English fallback
-- `values-zh-rCN/strings.xml`: Simplified Chinese
-- dates/numbers formatted with device locale
-- technical names remain stable: `ZCode`, `CommandCode`, `Agent`, `Hub`, `TTS`, `AUTO`
+```json
+{
+  "schemaVersion": 1,
+  "events": [],
+  "nextAfter": 123,
+  "latestSeq": 456,
+  "oldestSeq": 300
+}
+```
+
+New Android behavior:
+
+- if saved cursor is earlier than the retention floor, record that a history gap occurred;
+- rebase to the retained range/high-water according to policy;
+- do not individually speak old retained backlog;
+- optionally show one localized informational status such as `部分历史事件已过期`;
+- never fabricate the missing events.
+
+Older Android versions ignore the optional field and remain protocol-compatible.
+
+---
+
+## 8. SQLite read/write performance strategy
+
+### 8.1 Is long-term SQLite reading a problem?
+
+Not by itself.
+
+For this workload SQLite is a good fit because:
+
+- one primary Agent;
+- one/few Android readers;
+- small requests;
+- indexed cursor queries;
+- WAL mode;
+- short transactions.
+
+The current `idx_events_agent_seq(agent_id, seq)` keeps cursor pagination efficient as history grows. The current single DB connection + mutex serializes access and uses very little memory; at current traffic this is a stability advantage, not a bottleneck.
+
+Do **not** introduce a connection pool just because the DB is long-lived. Only change concurrency after a benchmark proves contention.
+
+### 8.2 State/health read cache
+
+Current `/state` and `/health` load and decode the same single snapshot from SQLite on every request. Android polling makes this unnecessary repeated DB/JSON work.
+
+Add a tiny in-memory cache:
+
+- cache only latest canonical snapshot + last-seen metadata;
+- populate once from SQLite at startup;
+- update only after a successful state/heartbeat commit;
+- `/state` and `/health` read from the immutable cache;
+- SQLite remains the restart/durability authority;
+- cache is bounded to one current snapshot per configured Agent.
+
+This removes most steady-state SQLite reads without meaningful memory cost.
+
+### 8.3 SQLite maintenance
+
+Automatic, low-impact maintenance:
+
+- WAL mode stays enabled;
+- keep short transactions;
+- set/benchmark a modest SQLite page cache instead of an unbounded application cache;
+- `PRAGMA optimize` after scheduled retention maintenance;
+- periodic `wal_checkpoint(PASSIVE)` after maintenance;
+- consider `journal_size_limit` (e.g. 16–32 MiB) after benchmark;
+- keep the existing busy timeout;
+- retain the single writer/connection model initially.
+
+Do **not** run frequent automatic full `VACUUM`.
+
+After DELETE, SQLite reuses free pages, so the DB file may not shrink immediately but should stop growing once retention reaches steady state. Physical shrink is an explicit maintenance operation during a low-traffic window.
+
+### 8.4 Storage diagnostics
+
+Add a read-only CLI command rather than a public LAN endpoint, for example:
+
+```text
+ai-control-hub stats
+```
+
+Report only non-sensitive metadata:
+
+- database bytes;
+- WAL bytes;
+- event count;
+- oldest/newest retained seq/time;
+- SQLite page count / freelist count;
+- approximate reusable bytes;
+- configured retention policy.
+
+The LAN doctor may surface warning status from these values without exposing event payloads.
+
+---
+
+## 9. Hub memory/goroutine/FD leak defense
+
+### 9.1 Existing strengths to preserve
+
+- HTTP read/write/header/idle timeouts are already bounded.
+- SQLite max open connections is one.
+- DB rows are scoped/closed.
+- discovery/server shutdown is context-driven.
+
+### 9.2 New regression gates
+
+Add a synthetic long-running/accelerated test suite that does not require a real device:
+
+1. start Hub;
+2. upload thousands/tens of thousands of state/heartbeat/event operations;
+3. repeatedly read state/health/events;
+4. force reconnect/error paths;
+5. run maintenance/pruning;
+6. sample Linux `/proc` RSS, FD count and thread count;
+7. in Go tests, sample `runtime.NumGoroutine()` around repeated start/stop cycles;
+8. close/reopen SQLite repeatedly;
+9. require metrics to settle near the post-warm-up baseline.
+
+Nightly/extended CI can run longer than PR CI.
+
+### 9.3 No production pprof exposure by default
+
+Do not expose Go `net/http/pprof` on the LAN Hub. If profiling is needed, enable it only in a test build or an explicitly configured loopback-only diagnostic listener.
+
+---
+
+## 10. Backup and disk-growth policy
+
+Backups are separate files and can consume more disk than the active DB if an operator schedules them indefinitely.
+
+If automatic backup scheduling is added later, require rotation, for example:
+
+- 7 daily backups;
+- 4 weekly backups;
+- explicit monthly archives if desired.
+
+Never auto-delete the only known-good backup.
+
+Before creating a backup, optionally warn if free disk is below a safe multiple of current DB size.
+
+---
+
+## 11. Visual UI plan (unchanged goals, revised implementation)
+
+### Android portrait
+
+Detailed dashboard:
+
+1. connection/AUTO address;
+2. overall Agent state;
+3. current task/activity;
+4. ZCode summary;
+5. CommandCode plan/remaining/usage windows;
+6. recent events;
+7. TTS controls;
+8. compact app/cursor diagnostics.
+
+### Android landscape
+
+Focus Mode only:
+
+1. slim connection header;
+2. CommandCode remaining hero card;
+3. current task/activity hero card;
+4. small TTS/status strip.
+
+No full event list/settings/diagnostic grid.
 
 ### Windows
 
-Frontend string catalogs:
+Full operator console, but native/event-driven. Visual reference remains the approved desktop mock; first implementation prioritizes correct data hierarchy and low resource use over reproducing every decorative glow.
 
-```text
-ui/locales/en-US.json
-ui/locales/zh-CN.json
-```
+---
 
-Default follows Windows locale. Settings can expose a language override later.
+## 12. Revised implementation roadmap
 
-Do not concatenate translated sentence fragments where word order may differ; use formatted complete strings.
+### R0 — Resource baseline & budgets
 
-## 10. Interaction and accessibility
+- Add reproducible process-resource sampling scripts.
+- Record baseline RSS/PSS/CPU/handles/FDs/goroutines for current Agent/Hub/Android.
+- Define regression thresholds from real release-build baseline.
 
-- Minimum Android touch target: 48dp.
-- Support system font scaling up to at least 1.3x without clipping hero values.
-- Status is text + icon + color.
-- Error messages are short and sanitized.
-- Keyboard navigation and visible focus states on Windows.
-- Reduced-motion mode follows OS preference where practical.
-- Avoid tiny low-contrast gray text on the old Android target.
+### R1 — Hub storage retention
 
-## 11. Implementation roadmap
+- Event retention config.
+- Retention-friendly index.
+- Batched event pruning.
+- Optional `oldestSeq` retention floor metadata.
+- Android forward-compatible retention-gap behavior tests.
+
+### R2 — SQLite efficiency & storage diagnostics
+
+- Latest state/heartbeat in-memory read cache.
+- `ai-control-hub stats`.
+- `PRAGMA optimize` / passive checkpoint maintenance.
+- WAL/DB size regression tests.
+
+### R3 — Agent local DB hygiene
+
+- Outbox size/count diagnostics and warnings.
+- Conservative terminal `task_state` retention/compaction design.
+- No silent event dropping.
+
+### R4 — Leak/endurance gates
+
+- Go Hub goroutine/RSS/FD accelerated soak.
+- Go Agent goroutine/RSS/SQLite accelerated soak.
+- Windows native UI leak harness once UI exists.
+- Android rotate/render/network/TTS lifecycle soak.
 
 ### UI0 — Design baseline
-- Archive these three reference screens.
-- Add design tokens/state mapping/i18n contract.
-- No runtime behavior changes.
 
-### UI1 — Android resources + i18n foundation
-- Move all hard-coded strings/colors/dimens to resources.
-- Add `zh-CN` + English.
-- Preserve existing portrait behavior/functionality.
+- Three approved reference screens.
+- Shared design tokens and state semantics.
+
+### UI1 — Android resource/i18n/lifecycle foundation
+
+- Move strings/colors/dimens/styles into resources.
+- `zh-CN` + English fallback.
+- Remove unconditional keep-screen-on.
+- Add lifecycle generation/cancellation safeguards.
+- Preserve existing portrait functionality.
 
 ### UI2 — Android portrait redesign
-- Implement portrait reference hierarchy.
-- Keep schema-v1 parser/event/TTS behavior unchanged.
-- Add screenshot/rendering tests where practical.
 
-### UI3 — Android landscape focus mode
-- Remove portrait lock.
-- Add `layout-land` two-hero-card design.
-- Add focused quota/current-task selection rules.
-- Validate API 23 + modern Android orientation recreation.
+- Implement detailed portrait dashboard.
+- Keep existing schema-v1/event/TTS semantics.
+- Add render/state tests.
 
-### UI4 — Windows desktop shell
-- New `ai-control-agent-ui` command/app.
-- Wails shell, tray, localization, theme tokens.
-- Read-only `/state`, `/health`, `/diagnostics` dashboard first.
+### UI3 — Android landscape Focus Mode
+
+- Remove portrait-only manifest lock.
+- Add `layout-land` sparse two-hero-card layout.
+- Optional desk-display keep-screen-on mode.
+- Rotation/leak tests.
+
+### UI4 — Windows native shell
+
+- Create C++20 Win32/Direct2D/DirectWrite `ai-control-agent-ui.exe`.
+- Tray + localization + native theme tokens.
+- Read-only local state/health/diagnostics first.
+- No service-control privileges required for normal dashboard.
 
 ### UI5 — Windows operational dashboard
-- Sources, task/activity, CommandCode detail.
-- Hub recent events when reachable.
-- Diagnostics page.
 
-### UI6 — Windows service actions
-- UAC-separated Start/Stop/Restart/Upgrade using existing CLI semantics.
-- Explicit confirmation for disruptive actions.
-- UI process never owns collector/service lifecycle.
+- Current task/activity.
+- Source details.
+- CommandCode credit/windows.
+- Diagnostics/event views using bounded datasets.
 
-### UI7 — Polish / compact mode
-- Desktop mini HUD/always-on-top.
-- Android detail overlays.
-- Accessibility, reduced motion, window/layout persistence.
+### UI6 — Windows privileged actions
 
-### UI8 — Delivery gates
-- Android portrait + landscape CI builds.
-- Windows UI build artifact.
-- Repository safety/APK secret scans remain active.
-- Manual visual acceptance against the three reference screens.
+- UAC-separated service start/stop/restart/upgrade.
+- No credential editor in dashboard.
+- Explicit confirmation for disruptive operations.
 
-## 12. First implementation recommendation
+### UI7 — Native Mini HUD / polish
 
-Start with **Android UI1 + UI2 + UI3** before the PC GUI. Android already has a functioning UI and all domain/event/TTS logic; the redesign can therefore deliver visible value without inventing a new desktop runtime.
+- Always-on-top compact window.
+- Update only on data changes.
+- Reduced motion/accessibility/window persistence.
 
-Then implement the Windows shell as a separate process. Do not embed GUI code into the Windows service.
+### UI8 — Delivery/resource gates
 
-## 13. Explicit non-goals for the first UI cycle
+- Windows native UI artifacts.
+- Android portrait/landscape APK.
+- Memory/CPU/leak budgets recorded and enforced.
+- Repository/APK secret scans remain active.
 
-- Hub administration GUI
-- editing vendor credentials in the dashboard
-- exposing raw logs/secrets/private paths
-- changing schema-v1 solely for decorative UI fields
-- speculative ZCode goal/token/tool fields
-- cloud/public-Internet control plane
-- always-on high-FPS animation
+---
+
+## 13. Priority decision
+
+The new order is:
+
+```text
+R0 -> R1 -> R2 -> R3 -> R4
+                |
+                +-> UI1 -> UI2 -> UI3
+                +-> UI4 -> UI5 -> UI6 -> UI7
+                                  -> UI8
+```
+
+Do not postpone storage retention until the database is already large. The Hub is always-on, so its data lifecycle is a foundation concern.
+
+Android UI work may begin after R0/R1 contracts are stable; it does not need to wait for every later optimization. Windows GUI should begin only after the native resource budget and leak-test harness are defined, so the implementation cannot drift back toward a heavyweight browser UI.
+
+---
+
+## 14. Explicit non-goals
+
+- Hub GUI / browser dashboard
+- Electron/WebView2 production desktop UI
+- Compose/Flutter/React Native Android rewrite
+- continuously animated HUD graphics
+- automatic deletion of pending Agent events
+- silent event-history loss after Hub retention pruning
+- public pprof/debug endpoints
+- speculative database joins or fabricated quota/task values
+- frequent automatic `VACUUM`
