@@ -33,6 +33,7 @@ target_link_libraries(ai-control-agent-ui PRIVATE
 
 if(MSVC)
     target_compile_options(ai-control-agent-ui PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    target_link_options(ai-control-agent-ui PRIVATE /Brepro)
     # Keep /WX globally. Suppress only C4456 in app.cpp, where Mini HUD geometry
     # intentionally uses nested RECT scratch variables with independent lifetimes.
     set_source_files_properties(src/app.cpp PROPERTIES COMPILE_OPTIONS "/wd4456")
@@ -45,6 +46,7 @@ target_compile_features(ai-control-agent-ui-model-test PRIVATE cxx_std_20)
 target_include_directories(ai-control-agent-ui-model-test PRIVATE src)
 if(MSVC)
     target_compile_options(ai-control-agent-ui-model-test PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    target_link_options(ai-control-agent-ui-model-test PRIVATE /Brepro)
     set_property(TARGET ai-control-agent-ui-model-test PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
