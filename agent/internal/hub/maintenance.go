@@ -15,6 +15,7 @@ func RunMaintenance(ctx context.Context, store *Store, config Config, logf Maint
 		return
 	}
 	policy := RetentionPolicyFromConfig(config)
+	_, _, _, interval := config.effectiveRetention()
 	run := func() {
 		started := time.Now()
 		result, err := store.PruneEvents(ctx, time.Now().UTC(), policy)
@@ -38,7 +39,7 @@ func RunMaintenance(ctx context.Context, store *Store, config Config, logf Maint
 	if ctx.Err() != nil {
 		return
 	}
-	ticker := time.NewTicker(config.MaintenanceInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
