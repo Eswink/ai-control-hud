@@ -10,6 +10,14 @@
 #include <windowsx.h>
 #include <wrl/client.h>
 
+// Windows.h maps StartService to StartServiceW. The dashboard never calls the
+// SCM mutation API directly: UI6 delegates service mutations to the Go CLI via
+// ShellExecuteEx("runas"). Undefining only this UI translation-unit macro keeps
+// the TextId source-compatible without weakening the privilege boundary.
+#ifdef StartService
+#undef StartService
+#endif
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -38,6 +46,10 @@ private:
     static constexpr UINT kTrayMessage = WM_APP + 2;
     static constexpr UINT kTrayOpen = 41001;
     static constexpr UINT kTrayExit = 41002;
+    static constexpr UINT kTrayServiceStart = 41011;
+    static constexpr UINT kTrayServiceStop = 41012;
+    static constexpr UINT kTrayServiceRestart = 41013;
+    static constexpr UINT kTrayServiceUpgrade = 41014;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
@@ -53,6 +65,7 @@ private:
     void AddTrayIcon();
     void RemoveTrayIcon();
     void ShowTrayMenu(POINT point);
+    void RunPrivilegedCommand(UINT commandId);
     void ShowDashboard();
     void HideDashboard();
 

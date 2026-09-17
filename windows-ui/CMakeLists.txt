@@ -6,6 +6,7 @@ add_executable(ai-control-agent-ui WIN32
     src/app.cpp
     src/agent_client.cpp
     src/localization.cpp
+    src/privileged_actions.cpp
 )
 
 target_compile_features(ai-control-agent-ui PRIVATE cxx_std_20)
@@ -19,6 +20,7 @@ target_compile_definitions(ai-control-agent-ui PRIVATE
 target_include_directories(ai-control-agent-ui PRIVATE src)
 
 target_link_libraries(ai-control-agent-ui PRIVATE
+    comdlg32
     d2d1
     dwrite
     dwmapi

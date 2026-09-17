@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static architecture gate for the native Windows Agent UI."""
+"""Static architecture and privilege-boundary gate for the native Windows Agent UI."""
 from __future__ import annotations
 
 import sys
@@ -19,6 +19,52 @@ def text(path: Path) -> str:
     if not path.is_file():
         fail(f"missing {path.relative_to(ROOT)}")
     return path.read_text(encoding="utf-8")
+
+
+def check_privileged_boundary() -> None:
+    privileged = SRC / "privileged_actions.cpp"
+    if not privileged.exists():
+        return
+
+    actions = text(privileged)
+    required = (
+        "PrivilegedAction::Start",
+        "PrivilegedAction::Stop",
+        "PrivilegedAction::Restart",
+        "PrivilegedAction::Upgrade",
+        'GetEnvironmentVariableW(L"ProgramFiles"',
+        'L"AI Control HUD\\\\ai-control-agent.exe"',
+        'std::wstring(L"service ") + verb',
+        'lpVerb = L"runas"',
+        "ShellExecuteExW",
+        "GetOpenFileNameW",
+        "SEE_MASK_NOCLOSEPROCESS",
+    )
+    for token in required:
+        if token not in actions:
+            fail(f"privileged action boundary is missing {token!r}")
+
+    delegated_forbidden = (
+        "CreateServiceW",
+        "ChangeServiceConfig",
+        "RegSetValue",
+        "CryptProtectData",
+        "commandcode.dpapi",
+        "hub.dpapi",
+    )
+    for token in delegated_forbidden:
+        if token in actions:
+            fail(f"UI must delegate privileged state changes to the Go CLI, found {token}")
+
+    lower_actions = actions.lower()
+    for token in ("cmd.exe", "powershell", "_wsystem(", "system(", "createprocessw("):
+        if token in lower_actions:
+            fail(f"privileged helper must not expose a generic command execution path: {token}")
+
+    app = text(SRC / "app.cpp")
+    for token in ("RunPrivilegedCommand", "ConfirmPrivileged", "MB_YESNO", "MB_DEFBUTTON2"):
+        if token not in app:
+            fail(f"privileged UI is missing explicit confirmation token {token!r}")
 
 
 def main() -> int:
@@ -57,7 +103,8 @@ def main() -> int:
     if "简" not in localization and "本机 Agent" not in localization:
         fail("Simplified Chinese localization catalog is missing")
 
-    print("[windows-native-ui] PASS native=C++20/Win32+D2D+DWrite transport=WinHTTP bounded=yes")
+    check_privileged_boundary()
+    print("[windows-native-ui] PASS native=C++20/Win32+D2D+DWrite transport=WinHTTP bounded=yes uac=allowlisted-delegation")
     return 0
 
 

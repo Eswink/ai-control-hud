@@ -37,6 +37,13 @@ std::wstring_view En(TextId id) noexcept {
         case TextId::OutboxCompacted: return L"Compacted task rows";
         case TextId::LocalApi: return L"Local API";
         case TextId::NoData: return L"No data available";
+        case TextId::ServiceActions: return L"Service actions";
+        case TextId::ServiceStartAction: return L"Start service";
+        case TextId::ServiceStopAction: return L"Stop service";
+        case TextId::ServiceRestartAction: return L"Restart service";
+        case TextId::ServiceUpgradeAction: return L"Upgrade service";
+        case TextId::ConfirmPrivileged: return L"This action requires administrator approval. Continue?";
+        case TextId::PrivilegedLaunchFailed: return L"Unable to launch the privileged Agent service command.";
         case TextId::CommandCode: return L"CommandCode";
         case TextId::ZCode: return L"ZCode";
         case TextId::Plan: return L"Plan";
@@ -86,6 +93,13 @@ std::wstring_view Zh(TextId id) noexcept {
         case TextId::OutboxCompacted: return L"已压缩任务行";
         case TextId::LocalApi: return L"本机 API";
         case TextId::NoData: return L"暂无可用数据";
+        case TextId::ServiceActions: return L"服务操作";
+        case TextId::ServiceStartAction: return L"启动服务";
+        case TextId::ServiceStopAction: return L"停止服务";
+        case TextId::ServiceRestartAction: return L"重启服务";
+        case TextId::ServiceUpgradeAction: return L"升级服务";
+        case TextId::ConfirmPrivileged: return L"此操作需要管理员批准。是否继续？";
+        case TextId::PrivilegedLaunchFailed: return L"无法启动需要管理员权限的 Agent 服务命令。";
         case TextId::CommandCode: return L"CommandCode";
         case TextId::ZCode: return L"ZCode";
         case TextId::Plan: return L"套餐";
@@ -116,7 +130,6 @@ std::wstring_view Zh(TextId id) noexcept {
 }  // namespace
 
 Localization::Localization() : simplifiedChinese_(SystemUsesSimplifiedChinese()) {}
-
 Localization::Localization(bool simplifiedChinese) noexcept : simplifiedChinese_(simplifiedChinese) {}
 
 std::wstring_view Localization::Get(TextId id) const noexcept {
