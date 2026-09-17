@@ -7,6 +7,8 @@ on:
       - 'scripts/ci-windows-native-ui.py'
       - 'scripts/ci-windows-ui-artifact-scan.py'
       - 'scripts/ci-windows-ui-resource-smoke.ps1'
+      - 'scripts/package-windows-ui.py'
+      - 'tools/tests/test_windows_ui_bundle.py'
       - '.github/workflows/windows-ui.yml'
       - 'agent/internal/api/**'
       - 'agent/internal/domain/**'
@@ -16,6 +18,8 @@ on:
       - 'scripts/ci-windows-native-ui.py'
       - 'scripts/ci-windows-ui-artifact-scan.py'
       - 'scripts/ci-windows-ui-resource-smoke.ps1'
+      - 'scripts/package-windows-ui.py'
+      - 'tools/tests/test_windows_ui_bundle.py'
       - '.github/workflows/windows-ui.yml'
       - 'agent/internal/api/**'
       - 'agent/internal/domain/**'
@@ -39,6 +43,18 @@ jobs:
         shell: pwsh
         run: python scripts/ci-windows-native-ui.py
 
+      - name: Resolve UI version
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'pull_request') {
+            $version = '0.0.0-pr.${{ github.event.pull_request.number }}'
+          }
+          else {
+            $short = '${{ github.sha }}'.Substring(0, 12)
+            $version = "0.0.0-dev.$short"
+          }
+          "WINDOWS_UI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Configure native UI
         shell: pwsh
         run: cmake -S windows-ui -B build/windows-ui -A x64
@@ -46,6 +62,21 @@ jobs:
       - name: Build native UI
         shell: pwsh
         run: cmake --build build/windows-ui --config Release --parallel
+
+      - name: Verify reproducible Release EXE
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'build/windows-ui/Release/ai-control-agent-ui.exe').Path
+          $first = Join-Path $env:RUNNER_TEMP 'ai-control-agent-ui-first.exe'
+          Copy-Item -LiteralPath $exe -Destination $first -Force
+          $hashA = (Get-FileHash -Algorithm SHA256 -LiteralPath $first).Hash
+          cmake --build build/windows-ui --config Release --target clean
+          cmake --build build/windows-ui --config Release --parallel
+          $hashB = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
+          if ($hashA -ne $hashB) {
+            throw "native Windows UI Release EXE is not reproducible: $hashA != $hashB"
+          }
+          Write-Host "[windows-ui-repro] PASS sha256=$hashA"
 
       - name: Run native model tests
         shell: pwsh
@@ -74,12 +105,47 @@ jobs:
             -Exe 'build/windows-ui/Release/ai-control-agent-ui.exe' `
             -MetricsPath 'build/windows-ui/resource-metrics.json'
 
+      - name: Package deterministic Windows UI delivery ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $bundle = 'dist/ai-control-agent-ui-windows-amd64.zip'
+          python scripts/package-windows-ui.py `
+            --exe 'build/windows-ui/Release/ai-control-agent-ui.exe' `
+            --metrics 'build/windows-ui/resource-metrics.json' `
+            --version "$env:WINDOWS_UI_VERSION" `
+            --output $bundle
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundle).Hash.ToLowerInvariant()
+          "$digest  ai-control-agent-ui-windows-amd64.zip" | Set-Content -LiteralPath "$bundle.sha256" -Encoding ascii
+          Write-Host "[windows-ui-bundle] sha256=$digest"
+
+      - name: Verify Windows UI delivery bundle
+        shell: pwsh
+        run: |
+          $bundle = (Resolve-Path 'dist/ai-control-agent-ui-windows-amd64.zip').Path
+          $root = Join-Path $env:RUNNER_TEMP 'windows-ui-bundle'
+          if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+          Expand-Archive -LiteralPath $bundle -DestinationPath $root
+          foreach ($name in @('ai-control-agent-ui.exe','resource-metrics.json','README.md','BUILD_INFO.txt','SHA256SUMS')) {
+            if (-not (Test-Path (Join-Path $root $name))) { throw "bundle member missing: $name" }
+          }
+          python scripts/ci-windows-ui-artifact-scan.py (Join-Path $root 'ai-control-agent-ui.exe')
+          foreach ($line in Get-Content (Join-Path $root 'SHA256SUMS')) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "invalid SHA256SUMS row: $line" }
+            $expected = $Matches[1]
+            $name = $Matches[2]
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root $name)).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "checksum mismatch for $name" }
+          }
+          Select-String -LiteralPath (Join-Path $root 'BUILD_INFO.txt') -SimpleMatch "version=$env:WINDOWS_UI_VERSION" | Out-Null
+          Write-Host '[windows-ui-bundle] PASS members/checksums/version'
+
       - name: Upload native Windows UI delivery bundle
         uses: actions/upload-artifact@v7
         with:
           name: ai-control-agent-ui-windows-amd64
           path: |
-            build/windows-ui/Release/ai-control-agent-ui.exe
-            build/windows-ui/resource-metrics.json
+            dist/ai-control-agent-ui-windows-amd64.zip
+            dist/ai-control-agent-ui-windows-amd64.zip.sha256
           if-no-files-found: error
           retention-days: 30
