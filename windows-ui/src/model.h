@@ -69,19 +69,20 @@ struct DashboardSnapshot {
 };
 
 inline int TaskPriority(const std::wstring& status) noexcept {
-    if (status == L"running") return 0;
-    if (status == L"waiting") return 1;
-    if (status == L"failed") return 2;
-    if (status == L"unknown") return 3;
-    if (status == L"completed") return 4;
-    return 5;
+    if (status == L"running" || status == L"executing" || status == L"working" ||
+        status == L"active" || status == L"in_progress") {
+        return 0;
+    }
+    if (status == L"waiting" || status == L"queued" || status == L"pending") return 1;
+    return 2;
 }
 
 inline const TaskView* CurrentTask(const DashboardSnapshot& snapshot) noexcept {
-    if (snapshot.tasks.empty()) return nullptr;
-    const TaskView* best = &snapshot.tasks.front();
+    const TaskView* best = nullptr;
     for (const auto& task : snapshot.tasks) {
-        if (TaskPriority(task.status) < TaskPriority(best->status)) best = &task;
+        const int priority = TaskPriority(task.status);
+        if (priority > 1) continue;
+        if (best == nullptr || priority < TaskPriority(best->status)) best = &task;
     }
     return best;
 }
