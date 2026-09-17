@@ -38,6 +38,7 @@ private:
     static constexpr UINT kTrayMessage = WM_APP + 2;
     static constexpr UINT kTrayOpen = 41001;
     static constexpr UINT kTrayExit = 41002;
+    static constexpr UINT kTrayMiniHud = 41003;
     static constexpr UINT kTrayServiceStart = 41011;
     static constexpr UINT kTrayServiceStop = 41012;
     static constexpr UINT kTrayServiceRestart = 41013;
@@ -58,6 +59,9 @@ private:
     void RemoveTrayIcon();
     void ShowTrayMenu(POINT point);
     void RunPrivilegedCommand(UINT commandId);
+    void ToggleMiniHud();
+    void ApplyMiniHud(bool enabled);
+    void PersistWindowState() noexcept;
     void ShowDashboard();
     void HideDashboard();
 
@@ -80,6 +84,9 @@ private:
     NOTIFYICONDATAW tray_{};
     bool trayAdded_{false};
     bool exitRequested_{false};
+    bool miniHud_{false};
+    RECT normalRect_{};
+    bool hasNormalRect_{false};
     Page page_{Page::Dashboard};
 
     Localization localization_;
