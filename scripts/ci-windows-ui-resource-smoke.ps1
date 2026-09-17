@@ -15,6 +15,8 @@ public static class HudNativeMetrics {
     public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")]
     public static extern int GetGuiResources(IntPtr hProcess, int uiFlags);
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool PostMessageW(IntPtr hWnd, uint msg, UIntPtr wParam, IntPtr lParam);
 }
 "@
 
@@ -22,9 +24,12 @@ $SW_HIDE = 0
 $SW_SHOW = 5
 $GR_GDIOBJECTS = 0
 $GR_USEROBJECTS = 1
+$WM_KEYDOWN = 0x0100
+$VK_M = 0x4D
 $WarmupSeconds = 3
 $CpuSampleSeconds = 4
-$ToggleCycles = 24
+$ShowHideCycles = 16
+$MiniHudToggleCycles = 20
 $WorkingSetTargetMiB = 48
 $MaxMemoryGrowthMiB = 16
 $MaxHandleGrowth = 16
@@ -64,6 +69,31 @@ function Delta-MiB([int64]$After, [int64]$Before) {
     return [Math]::Round(($After - $Before) / 1MB, 2)
 }
 
+function Assert-Growth([hashtable]$After, [hashtable]$Before, [string]$Phase) {
+    $workingSetGrowthMiB = Delta-MiB $After.workingSet $Before.workingSet
+    $privateGrowthMiB = Delta-MiB $After.privateBytes $Before.privateBytes
+    $handleGrowth = $After.handles - $Before.handles
+    $threadGrowth = $After.threads - $Before.threads
+    $gdiGrowth = $After.gdi - $Before.gdi
+    $userGrowth = $After.user - $Before.user
+
+    if ($workingSetGrowthMiB -gt $MaxMemoryGrowthMiB) { throw "$Phase working-set growth ${workingSetGrowthMiB} MiB exceeds ${MaxMemoryGrowthMiB} MiB" }
+    if ($privateGrowthMiB -gt $MaxMemoryGrowthMiB) { throw "$Phase private-byte growth ${privateGrowthMiB} MiB exceeds ${MaxMemoryGrowthMiB} MiB" }
+    if ($handleGrowth -gt $MaxHandleGrowth) { throw "$Phase handle growth $handleGrowth exceeds $MaxHandleGrowth" }
+    if ($threadGrowth -gt $MaxThreadGrowth) { throw "$Phase thread growth $threadGrowth exceeds $MaxThreadGrowth" }
+    if ($gdiGrowth -gt $MaxGuiGrowth) { throw "$Phase GDI-object growth $gdiGrowth exceeds $MaxGuiGrowth" }
+    if ($userGrowth -gt $MaxGuiGrowth) { throw "$Phase USER-object growth $userGrowth exceeds $MaxGuiGrowth" }
+
+    return [ordered]@{
+        workingSetMiB = $workingSetGrowthMiB
+        privateMiB = $privateGrowthMiB
+        handles = $handleGrowth
+        threads = $threadGrowth
+        gdi = $gdiGrowth
+        user = $userGrowth
+    }
+}
+
 if (-not (Test-Path -LiteralPath $Exe)) {
     throw "Windows UI executable not found: $Exe"
 }
@@ -88,7 +118,23 @@ try {
         throw "Visible CPU time ${visibleCpu}s over ${CpuSampleSeconds}s exceeds hard smoke limit ${MaxVisibleCpuSeconds}s"
     }
 
-    for ($i = 0; $i -lt $ToggleCycles; $i++) {
+    # Exercise the real UI7 Mini HUD transition path. Each pair enters and exits
+    # Mini HUD, forcing D2D target recreation, topmost changes and state writes.
+    for ($i = 0; $i -lt $MiniHudToggleCycles; $i++) {
+        if (-not [HudNativeMetrics]::PostMessageW($window, $WM_KEYDOWN, [UIntPtr]$VK_M, [IntPtr]::Zero)) {
+            throw "Unable to post Mini HUD toggle at cycle $i"
+        }
+        Start-Sleep -Milliseconds 45
+        if (-not [HudNativeMetrics]::PostMessageW($window, $WM_KEYDOWN, [UIntPtr]$VK_M, [IntPtr]::Zero)) {
+            throw "Unable to post full-dashboard toggle at cycle $i"
+        }
+        Start-Sleep -Milliseconds 45
+    }
+    Start-Sleep -Milliseconds 600
+    $afterMiniHud = Snapshot-UiProcess $process
+    $miniHudGrowth = Assert-Growth $afterMiniHud $baseline "Mini HUD"
+
+    for ($i = 0; $i -lt $ShowHideCycles; $i++) {
         [void][HudNativeMetrics]::ShowWindowAsync($window, $SW_HIDE)
         Start-Sleep -Milliseconds 35
         [void][HudNativeMetrics]::ShowWindowAsync($window, $SW_SHOW)
@@ -96,20 +142,7 @@ try {
     }
     Start-Sleep -Milliseconds 500
     $afterCycles = Snapshot-UiProcess $process
-
-    $workingSetGrowthMiB = Delta-MiB $afterCycles.workingSet $baseline.workingSet
-    $privateGrowthMiB = Delta-MiB $afterCycles.privateBytes $baseline.privateBytes
-    $handleGrowth = $afterCycles.handles - $baseline.handles
-    $threadGrowth = $afterCycles.threads - $baseline.threads
-    $gdiGrowth = $afterCycles.gdi - $baseline.gdi
-    $userGrowth = $afterCycles.user - $baseline.user
-
-    if ($workingSetGrowthMiB -gt $MaxMemoryGrowthMiB) { throw "Working-set growth ${workingSetGrowthMiB} MiB exceeds ${MaxMemoryGrowthMiB} MiB" }
-    if ($privateGrowthMiB -gt $MaxMemoryGrowthMiB) { throw "Private-byte growth ${privateGrowthMiB} MiB exceeds ${MaxMemoryGrowthMiB} MiB" }
-    if ($handleGrowth -gt $MaxHandleGrowth) { throw "Handle growth $handleGrowth exceeds $MaxHandleGrowth" }
-    if ($threadGrowth -gt $MaxThreadGrowth) { throw "Thread growth $threadGrowth exceeds $MaxThreadGrowth" }
-    if ($gdiGrowth -gt $MaxGuiGrowth) { throw "GDI-object growth $gdiGrowth exceeds $MaxGuiGrowth" }
-    if ($userGrowth -gt $MaxGuiGrowth) { throw "USER-object growth $userGrowth exceeds $MaxGuiGrowth" }
+    $showHideGrowth = Assert-Growth $afterCycles $baseline "Show/hide"
 
     [void][HudNativeMetrics]::ShowWindowAsync($window, $SW_HIDE)
     Start-Sleep -Milliseconds 250
@@ -122,25 +155,23 @@ try {
     }
 
     $metrics = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         workingSetMiB = $workingSetMiB
         privateMiB = $privateMiB
         visibleCpuSecondsOver4s = $visibleCpu
         hiddenCpuSecondsOver4s = $hiddenCpu
-        toggleCycles = $ToggleCycles
+        miniHudToggleCycles = $MiniHudToggleCycles
+        showHideCycles = $ShowHideCycles
         growth = [ordered]@{
-            workingSetMiB = $workingSetGrowthMiB
-            privateMiB = $privateGrowthMiB
-            handles = $handleGrowth
-            threads = $threadGrowth
-            gdi = $gdiGrowth
-            user = $userGrowth
+            miniHud = $miniHudGrowth
+            showHide = $showHideGrowth
         }
         baseline = $baseline
+        afterMiniHud = $afterMiniHud
         afterCycles = $afterCycles
     }
 
-    $json = $metrics | ConvertTo-Json -Depth 5
+    $json = $metrics | ConvertTo-Json -Depth 6
     Write-Host "[windows-ui-resource-smoke] PASS"
     Write-Host $json
     if ($MetricsPath -ne "") {
