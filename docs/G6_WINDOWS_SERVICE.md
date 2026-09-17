@@ -56,7 +56,7 @@ Optional explicit ZCode paths:
 
 1. verifies at least one ZCode database is readable;
 2. resolves and persists absolute source paths for LocalSystem;
-3. adds the minimum SYSTEM read/traverse ACLs required for those SQLite sources;
+3. adds the minimum SYSTEM read/traverse ACLs required for those SQLite sources and, for the standard runtime layout, `~\.zcode\cli\log` so turn-lifecycle JSONL can be read without exposing it through the API;
 4. reuses the protected CommandCode SecretStore unless an explicit `--provider-config` is supplied;
 5. writes ACL-protected machine config without credentials;
 6. copies the Agent into `Program Files`;
@@ -108,18 +108,25 @@ For controlled automation a source path can be explicit:
 .\ai-control-agent.exe service upgrade --source C:\Temp\ai-control-agent-new.exe
 ```
 
+If the service was installed with a non-default machine-config path, pass it explicitly:
+
+```powershell
+.\ai-control-agent-new.exe service upgrade --config C:\Path\To\agent.json
+```
+
 The normal operator path should run the new executable directly. Do not invoke the installed target as both the running CLI and replacement source.
 
 Upgrade semantics:
 
 1. require an already-installed service in `running` or `stopped` state;
-2. copy and fsync the candidate to `ai-control-agent.exe.upgrade.new` **before** service downtime;
-3. if the service was running, stop it cleanly;
-4. rename the old binary to `ai-control-agent.exe.upgrade.bak`;
-5. atomically move the staged candidate into the installed path;
-6. if the service was previously running, start it and require stable SCM `Running` state;
-7. on candidate startup failure, stop the failed candidate, restore the old binary, and restart the old service;
-8. after success remove the backup; after rollback remove upgrade scratch state.
+2. validate the replacement binary, load the existing machine config, and refresh additive SYSTEM read/traverse ACLs for configured ZCode SQLite sources plus the standard sibling `cli\log` directory **before** service downtime; `agent.json` is not rewritten;
+3. copy and fsync the candidate to `ai-control-agent.exe.upgrade.new` before service downtime;
+4. if the service was running, stop it cleanly;
+5. rename the old binary to `ai-control-agent.exe.upgrade.bak`;
+6. atomically move the staged candidate into the installed path;
+7. if the service was previously running, start it and require stable SCM `Running` state;
+8. on candidate startup failure, stop the failed candidate, restore the old binary, and restart the old service;
+9. after success remove the backup; after rollback remove upgrade scratch state.
 
 A service that was stopped before upgrade remains stopped.
 
@@ -128,9 +135,11 @@ The upgrade operation **does not** rewrite or re-import:
 - `%ProgramData%\AIControlHUD\agent.json`;
 - CommandCode DPAPI SecretStore;
 - Hub DPAPI SecretStore;
-- ZCode source paths/ACLs;
+- configured ZCode source paths;
 - Windows Firewall rule;
 - SCM registration/recovery configuration.
+
+ZCode source ACLs are the deliberate exception: the command re-applies only the existing additive SYSTEM read/traverse grants so an older installation can consume newly required read-only sources such as `cli\log` after a binary-only upgrade.
 
 If a stale `.upgrade.bak` exists, the command refuses to overwrite it. This is deliberate: an unclean prior upgrade may have left the last known-good executable there.
 
@@ -181,7 +190,7 @@ Windows hosted CI performs real SCM operations with synthetic ZCode state and no
 - reinstall from protected SecretStore with no plaintext provider/key file;
 - final purge.
 
-This CI path exercises the same executable replacement and SCM waits used by production.
+The machine-config unit gate also locks the standard runtime-DB to `cli\log` path derivation used by install/upgrade source-access refresh. This CI path exercises the same executable replacement and SCM waits used by production.
 
 ## Target-machine status
 
