@@ -17,6 +17,7 @@ on:
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - 'docs/G7_CROSS_PLATFORM.md'
+      - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-agent.yml'
   pull_request:
     paths:
@@ -34,6 +35,7 @@ on:
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - 'docs/G7_CROSS_PLATFORM.md'
+      - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-agent.yml'
   workflow_dispatch:
 
