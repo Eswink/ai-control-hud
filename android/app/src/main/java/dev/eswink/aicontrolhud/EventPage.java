@@ -15,12 +15,18 @@ final class EventPage {
     final List<EventItem> events;
     final long nextAfter;
     final long latestSeq;
+    final long oldestSeq;
 
     EventPage(int schemaVersion, List<EventItem> events, long nextAfter, long latestSeq) {
+        this(schemaVersion, events, nextAfter, latestSeq, 0L);
+    }
+
+    EventPage(int schemaVersion, List<EventItem> events, long nextAfter, long latestSeq, long oldestSeq) {
         this.schemaVersion = schemaVersion;
         this.events = events;
         this.nextAfter = nextAfter;
         this.latestSeq = latestSeq;
+        this.oldestSeq = oldestSeq;
     }
 
     static EventPage parse(JSONObject root) throws JSONException, IncompatibleSchemaException {
@@ -29,8 +35,12 @@ final class EventPage {
 
         long nextAfter = root.getLong("nextAfter");
         long latestSeq = root.getLong("latestSeq");
-        if (nextAfter < 0 || latestSeq < 0) {
+        long oldestSeq = root.optLong("oldestSeq", 0L);
+        if (nextAfter < 0 || latestSeq < 0 || oldestSeq < 0) {
             throw new JSONException("Invalid event cursor metadata");
+        }
+        if (oldestSeq > 0 && latestSeq > 0 && oldestSeq > latestSeq) {
+            throw new JSONException("oldestSeq is ahead of latestSeq");
         }
 
         JSONArray values = root.getJSONArray("events");
@@ -67,7 +77,8 @@ final class EventPage {
                 schemaVersion,
                 Collections.unmodifiableList(events),
                 nextAfter,
-                latestSeq
+                latestSeq,
+                oldestSeq
         );
     }
 
@@ -90,6 +101,10 @@ final class EventPage {
 
     boolean requiresRebase(long after) {
         return events.isEmpty() && latestSeq < after;
+    }
+
+    boolean cursorPredatesRetention(long after) {
+        return oldestSeq > 0 && after < oldestSeq - 1;
     }
 
     private static String optionalString(JSONObject object, String key) {
