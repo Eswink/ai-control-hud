@@ -2,6 +2,7 @@
 
 #include "agent_client.h"
 #include "health_probe.h"
+#include "privileged_actions.h"
 
 #include <dwmapi.h>
 #include <shellapi.h>
@@ -505,13 +506,66 @@ void App::ShowTrayMenu(POINT point) {
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return;
     const std::wstring open(localization_.Get(TextId::OpenDashboard));
+    const std::wstring actions(localization_.Get(TextId::ServiceActions));
+    const std::wstring start(localization_.Get(TextId::StartService));
+    const std::wstring stop(localization_.Get(TextId::StopService));
+    const std::wstring restart(localization_.Get(TextId::RestartService));
+    const std::wstring upgrade(localization_.Get(TextId::UpgradeService));
     const std::wstring exit(localization_.Get(TextId::Exit));
+
     AppendMenuW(menu, MF_STRING, kTrayOpen, open.c_str());
+    HMENU serviceMenu = CreatePopupMenu();
+    if (serviceMenu != nullptr) {
+        AppendMenuW(serviceMenu, MF_STRING, kTrayServiceStart, start.c_str());
+        AppendMenuW(serviceMenu, MF_STRING, kTrayServiceStop, stop.c_str());
+        AppendMenuW(serviceMenu, MF_STRING, kTrayServiceRestart, restart.c_str());
+        AppendMenuW(serviceMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(serviceMenu, MF_STRING, kTrayServiceUpgrade, upgrade.c_str());
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(serviceMenu), actions.c_str());
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kTrayExit, exit.c_str());
     SetForegroundWindow(window_);
     TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN, point.x, point.y, 0, window_, nullptr);
     DestroyMenu(menu);
+}
+
+void App::RunPrivilegedCommand(UINT commandId) {
+    PrivilegedAction action{};
+    TextId actionText = TextId::RestartService;
+    switch (commandId) {
+        case kTrayServiceStart:
+            action = PrivilegedAction::Start;
+            actionText = TextId::StartService;
+            break;
+        case kTrayServiceStop:
+            action = PrivilegedAction::Stop;
+            actionText = TextId::StopService;
+            break;
+        case kTrayServiceRestart:
+            action = PrivilegedAction::Restart;
+            actionText = TextId::RestartService;
+            break;
+        case kTrayServiceUpgrade:
+            action = PrivilegedAction::Upgrade;
+            actionText = TextId::UpgradeService;
+            break;
+        default:
+            return;
+    }
+
+    const std::wstring title(localization_.Get(TextId::ServiceActions));
+    const std::wstring prompt = std::wstring(localization_.Get(actionText)) + L"\n\n" +
+                                std::wstring(localization_.Get(TextId::ConfirmPrivileged));
+    if (MessageBoxW(window_, prompt.c_str(), title.c_str(), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
+
+    const PrivilegedLaunchResult result = LaunchPrivilegedServiceAction(action, window_);
+    if (!result.launched && result.error != ERROR_CANCELLED) {
+        const std::wstring error = std::wstring(localization_.Get(TextId::PrivilegedLaunchFailed)) +
+                                   L"\n\nWin32 error: " + std::to_wstring(result.error);
+        MessageBoxW(window_, error.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
+    }
+    pollWake_.notify_all();
 }
 
 void App::ShowDashboard() {
@@ -653,10 +707,16 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 ShowTrayMenu(point);
             }
             return 0;
-        case WM_COMMAND:
-            if (LOWORD(wParam) == kTrayOpen) { ShowDashboard(); return 0; }
-            if (LOWORD(wParam) == kTrayExit) { exitRequested_ = true; DestroyWindow(window_); return 0; }
+        case WM_COMMAND: {
+            const UINT commandId = LOWORD(wParam);
+            if (commandId == kTrayOpen) { ShowDashboard(); return 0; }
+            if (commandId == kTrayExit) { exitRequested_ = true; DestroyWindow(window_); return 0; }
+            if (commandId >= kTrayServiceStart && commandId <= kTrayServiceUpgrade) {
+                RunPrivilegedCommand(commandId);
+                return 0;
+            }
             break;
+        }
         case WM_CLOSE:
             if (exitRequested_) DestroyWindow(window_); else HideDashboard();
             return 0;
