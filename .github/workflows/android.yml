@@ -112,7 +112,7 @@ jobs:
           HUD_ANDROID_VERSION_CODE: '900001'
         run: gradle --no-daemon :app:assembleRelease
 
-      - name: Verify signed release, version metadata, and secret scan
+      - name: Verify signed release, portrait and landscape resources, version metadata, and secret scan
         shell: bash
         env:
           EXPECTED_VERSION_NAME: 0.0.0-ci
@@ -120,11 +120,23 @@ jobs:
         run: |
           set -euo pipefail
           apk='android/app/build/outputs/apk/release/app-release.apk'
+          build_tools="${ANDROID_HOME}/build-tools/35.0.0"
           test -f "$apk"
-          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk"
-          badging="$("${ANDROID_HOME}/build-tools/35.0.0/aapt" dump badging "$apk" | head -n 1)"
+          "${build_tools}/apksigner" verify --verbose --print-certs "$apk"
+          badging="$("${build_tools}/aapt" dump badging "$apk" | head -n 1)"
           grep -F "versionCode='${EXPECTED_VERSION_CODE}'" <<<"$badging"
           grep -F "versionName='${EXPECTED_VERSION_NAME}'" <<<"$badging"
+
+          # AAPT2 compiles/optimizes XML resources, so APK ZIP member paths are
+          # not a stable representation of source resource directories. Verify
+          # the packaged resource table instead: activity_main must exist and a
+          # landscape configuration must be present. The static UI gate above
+          # separately requires both default and layout-land/activity_main.xml.
+          "${build_tools}/aapt2" dump resources "$apk" > /tmp/hud-apk-resources.txt
+          grep -F 'activity_main' /tmp/hud-apk-resources.txt
+          "${build_tools}/aapt2" dump configurations "$apk" > /tmp/hud-apk-configurations.txt
+          grep -E '^land($|-)' /tmp/hud-apk-configurations.txt
+
           python3 scripts/ci-android-apk-secret-scan.py "$apk"
 
       - name: Remove ephemeral CI release key
@@ -138,3 +150,12 @@ jobs:
           name: ai-control-hud-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload signed CI release APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hud-android-ci-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
