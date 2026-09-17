@@ -57,7 +57,17 @@ def main() -> int:
     if "简" not in localization and "本机 Agent" not in localization:
         fail("Simplified Chinese localization catalog is missing")
 
-    print("[windows-native-ui] PASS native=C++20/Win32+D2D+DWrite transport=WinHTTP bounded=yes")
+    privileged = SRC / "privileged_actions.cpp"
+    if privileged.exists():
+        actions = text(privileged)
+        for token in ('lpVerb = L"runas"', 'L"service "', "ShellExecuteExW", "GetOpenFileNameW"):
+            if token not in actions:
+                fail(f"privileged action delegation is missing {token}")
+        for forbidden in ("CreateServiceW", "ChangeServiceConfig", "RegSetValue", "CryptProtectData", "commandcode.dpapi", "hub.dpapi"):
+            if forbidden in actions:
+                fail(f"UI must delegate privileged state changes to the Go CLI, found {forbidden}")
+
+    print("[windows-native-ui] PASS native=C++20/Win32+D2D+DWrite transport=WinHTTP bounded=yes uac=delegated")
     return 0
 
 
