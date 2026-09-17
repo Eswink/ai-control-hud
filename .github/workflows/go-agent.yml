@@ -7,9 +7,11 @@ on:
       - 'server/tests/fixtures/**'
       - 'scripts/ai-control-agent-systemd.sh'
       - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ai-control-agent-unix-upgrade.sh'
       - 'scripts/ci-agent-runtime-smoke.py'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/ci-g7-unix-service-smoke.sh'
+      - 'scripts/fixtures/broken-service-agent.go'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
@@ -21,9 +23,11 @@ on:
       - 'server/tests/fixtures/**'
       - 'scripts/ai-control-agent-systemd.sh'
       - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ai-control-agent-unix-upgrade.sh'
       - 'scripts/ci-agent-runtime-smoke.py'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/ci-g7-unix-service-smoke.sh'
+      - 'scripts/fixtures/broken-service-agent.go'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
@@ -86,6 +90,7 @@ jobs:
         run: |
           bash -n ./scripts/ai-control-agent-systemd.sh
           bash -n ./scripts/ai-control-agent-launchd.sh
+          bash -n ./scripts/ai-control-agent-unix-upgrade.sh
           bash -n ./scripts/ci-g7-unix-service-smoke.sh
 
       - name: Native runtime smoke (Windows)
