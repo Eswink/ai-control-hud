@@ -133,7 +133,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/hud_space_5"
                 android:maxLines="2"
-                android:text="--"
+                android:text="@string/placeholder_dash"
                 android:textColor="@color/hud_text_secondary"
                 android:textSize="@dimen/hud_text_13" />
 
@@ -142,7 +142,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/hud_space_8"
-                android:text="--"
+                android:text="@string/placeholder_dash"
                 android:textColor="@color/hud_text_primary"
                 android:textSize="@dimen/hud_text_20"
                 android:textStyle="bold" />
@@ -193,7 +193,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/hud_space_5"
                 android:maxLines="2"
-                android:text="--"
+                android:text="@string/placeholder_dash"
                 android:textColor="@color/hud_text_secondary"
                 android:textSize="@dimen/hud_text_13" />
 
@@ -221,7 +221,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/hud_space_16"
-                android:text="5H --"
+                android:text="@string/five_hour_unavailable"
                 android:textColor="@color/hud_text_secondary"
                 android:textSize="@dimen/hud_text_13" />
 
@@ -240,7 +240,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/hud_space_13"
-                android:text="WEEK --"
+                android:text="@string/weekly_unavailable"
                 android:textColor="@color/hud_text_secondary"
                 android:textSize="@dimen/hud_text_13" />
 
