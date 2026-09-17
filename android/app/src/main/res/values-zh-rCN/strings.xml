@@ -33,6 +33,7 @@
     <string name="tts_ready">TTS 就绪</string>
     <string name="tts_unavailable">TTS 启动中 / 不可用</string>
     <string name="voice_policy_format">完成 %1$s · 失败 %2$s · 静默 %3$s</string>
+    <string name="voice_status_format">%1$s · %2$s\n%3$s</string>
     <string name="setting_on">开启</string>
     <string name="setting_off">关闭</string>
 
@@ -65,6 +66,8 @@
     </plurals>
     <string name="task_summary_unavailable">任务统计不可用</string>
     <string name="task_summary_format">%1$d 运行中  ·  %2$d 等待中  ·  %3$d 失败</string>
+    <string name="task_changes_format">+%1$s / -%2$s</string>
+    <string name="task_activity_format">&gt; %1$s</string>
 
     <string name="plan_unavailable">套餐 --</string>
     <string name="plan_format">套餐  %1$s</string>
@@ -81,6 +84,7 @@
     <string name="waiting_agent_task">等待 Agent 状态</string>
     <string name="server_http_error">%1$s · HTTP %2$d</string>
     <string name="server_network_error">%1$s  ·  %2$s</string>
+    <string name="http_status">HTTP %1$d</string>
     <string name="backend_schema_unsupported">服务端协议版本 %1$d 与当前 APK 不兼容</string>
     <string name="network_error">网络错误</string>
     <string name="cursor_persistence_failed">事件游标保存失败</string>
