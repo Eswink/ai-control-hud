@@ -89,3 +89,15 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 		t.Fatal("expected unknown-field rejection")
 	}
 }
+
+func TestZCodeLogDirFollowsRuntimeDatabaseLayout(t *testing.T) {
+	root := t.TempDir()
+	runtimeDB := filepath.Join(root, ".zcode", "cli", "db", "db.sqlite")
+	want := filepath.Join(root, ".zcode", "cli", "log")
+	if got := zcodeLogDir(runtimeDB); got != want {
+		t.Fatalf("zcodeLogDir() = %q, want %q", got, want)
+	}
+	if got := zcodeLogDir(filepath.Join(root, "custom", "runtime.sqlite")); got != "" {
+		t.Fatalf("non-standard runtime path produced log dir %q", got)
+	}
+}
