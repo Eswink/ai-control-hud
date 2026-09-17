@@ -4,12 +4,16 @@ on:
   push:
     paths:
       - 'android/**'
+      - 'server/tests/fixtures/**'
+      - 'docs/HUB_V2_PLAN.md'
       - 'scripts/ci-android-apk-secret-scan.py'
       - '.github/workflows/android.yml'
       - '.github/workflows/android-release.yml'
   pull_request:
     paths:
       - 'android/**'
+      - 'server/tests/fixtures/**'
+      - 'docs/HUB_V2_PLAN.md'
       - 'scripts/ci-android-apk-secret-scan.py'
       - '.github/workflows/android.yml'
       - '.github/workflows/android-release.yml'
