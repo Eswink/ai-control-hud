@@ -82,6 +82,16 @@ private:
         ID2D1Brush* brush,
         DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING
     );
+    float DrawTextFitted(
+        ID2D1RenderTarget* target,
+        std::wstring_view text,
+        IDWriteTextFormat* format,
+        const D2D1_RECT_F& rect,
+        ID2D1Brush* brush,
+        UINT32 maxLines,
+        bool wrap,
+        DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING
+    );
 
     HINSTANCE instance_{nullptr};
     HWND window_{nullptr};
@@ -121,6 +131,7 @@ private:
     Microsoft::WRL::ComPtr<IDWriteTextFormat> titleFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> sectionFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> heroFormat_;
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> taskTitleFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> bodyFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> smallFormat_;
 };
