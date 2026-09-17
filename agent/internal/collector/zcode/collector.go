@@ -381,6 +381,9 @@ func (c *Collector) collectTaskIndexExcluding(ctx context.Context, exclude map[s
 		if _, skip := exclude[taskID]; skip {
 			continue
 		}
+		if len(tasks) >= limit {
+			continue
+		}
 		workspace := workspaceLabel(workspacePath, workspaceKey)
 		taskTitle := truncate(strings.TrimSpace(title), 500)
 		if taskTitle == "" {
@@ -393,9 +396,6 @@ func (c *Collector) collectTaskIndexExcluding(ctx context.Context, exclude map[s
 			Status:    normalizeStatus(status.String),
 			UpdatedAt: timestamp(updatedAt),
 		})
-		if len(tasks) >= limit {
-			break
-		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, errors.New("ZCode task index read failed")
