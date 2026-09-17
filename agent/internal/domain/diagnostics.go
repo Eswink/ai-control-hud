@@ -27,12 +27,22 @@ type DiagnosticsSources struct {
 	CommandCode SourceDiagnostics `json:"commandCode"`
 }
 
+type OutboxDiagnostics struct {
+	Status                  string `json:"status"`
+	PendingEvents           int    `json:"pendingEvents"`
+	TaskBaselineRows        int    `json:"taskBaselineRows"`
+	CompactedTaskRows       int    `json:"compactedTaskRows"`
+	OldestPendingAgeSeconds *int64 `json:"oldestPendingAgeSeconds"`
+	ReusableBytes           int64  `json:"reusableBytes"`
+}
+
 type DiagnosticsResponse struct {
-	DiagnosticsVersion int                `json:"diagnosticsVersion"`
-	StateSchemaVersion int                `json:"stateSchemaVersion"`
-	Role               string             `json:"role"`
-	Version            string             `json:"version"`
-	Time               time.Time          `json:"time"`
-	UptimeSeconds      int64              `json:"uptimeSeconds"`
-	Sources            DiagnosticsSources `json:"sources"`
+	DiagnosticsVersion int                 `json:"diagnosticsVersion"`
+	StateSchemaVersion int                 `json:"stateSchemaVersion"`
+	Role               string              `json:"role"`
+	Version            string              `json:"version"`
+	Time               time.Time           `json:"time"`
+	UptimeSeconds      int64               `json:"uptimeSeconds"`
+	Sources            DiagnosticsSources  `json:"sources"`
+	Outbox             *OutboxDiagnostics  `json:"outbox,omitempty"`
 }
