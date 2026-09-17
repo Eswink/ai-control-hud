@@ -6,6 +6,7 @@ add_executable(ai-control-agent-ui WIN32
     src/app.cpp
     src/agent_client.cpp
     src/localization.cpp
+    src/privileged_actions.cpp
 )
 
 target_compile_features(ai-control-agent-ui PRIVATE cxx_std_20)
