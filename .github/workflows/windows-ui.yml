@@ -1,0 +1,77 @@
+name: Windows Native UI CI
+
+on:
+  push:
+    paths:
+      - 'windows-ui/**'
+      - 'scripts/ci-windows-native-ui.py'
+      - '.github/workflows/windows-ui.yml'
+      - 'agent/internal/api/**'
+      - 'agent/internal/domain/**'
+  pull_request:
+    paths:
+      - 'windows-ui/**'
+      - 'scripts/ci-windows-native-ui.py'
+      - '.github/workflows/windows-ui.yml'
+      - 'agent/internal/api/**'
+      - 'agent/internal/domain/**'
+  workflow_dispatch:
+
+concurrency:
+  group: windows-native-ui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-smoke:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Enforce native low-resource architecture
+        shell: pwsh
+        run: python scripts/ci-windows-native-ui.py
+
+      - name: Configure native UI
+        shell: pwsh
+        run: cmake -S windows-ui -B build/windows-ui -A x64
+
+      - name: Build native UI
+        shell: pwsh
+        run: cmake --build build/windows-ui --config Release --parallel
+
+      - name: Run native model tests
+        shell: pwsh
+        run: ctest --test-dir build/windows-ui -C Release --output-on-failure
+
+      - name: Native process startup smoke
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'build/windows-ui/Release/ai-control-agent-ui.exe').Path
+          $process = Start-Process -FilePath $exe -PassThru
+          try {
+            Start-Sleep -Seconds 3
+            $process.Refresh()
+            if ($process.HasExited) {
+              throw "native UI exited during startup smoke with code $($process.ExitCode)"
+            }
+            $item = Get-Item $exe
+            Write-Host "[windows-ui-smoke] alive pid=$($process.Id) binary_bytes=$($item.Length)"
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+              $process.WaitForExit()
+            }
+          }
+
+      - name: Upload native Windows UI
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-agent-ui-windows-amd64
+          path: build/windows-ui/Release/ai-control-agent-ui.exe
+          if-no-files-found: error
+          retention-days: 30
