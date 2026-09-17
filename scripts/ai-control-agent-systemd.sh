@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+UPGRADE_HELPER="$SCRIPT_DIR/ai-control-agent-unix-upgrade.sh"
 SERVICE_NAME="ai-control-hud.service"
 INSTALL_DIR="/usr/local/lib/ai-control-hud"
 CONFIG_PATH="/etc/ai-control-hud/agent.json"
@@ -16,6 +18,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ai-control-agent-systemd.sh install --agent PATH [--provider-config PATH] [--runtime-db PATH] [--task-index-db PATH] [--listen HOST:PORT] [--config PATH]
+  ai-control-agent-systemd.sh upgrade --agent PATH
   ai-control-agent-systemd.sh start|stop|restart|status
   ai-control-agent-systemd.sh remove [--purge] [--config PATH]
 EOF
@@ -145,6 +148,12 @@ EOF
     sudo systemctl daemon-reload
     sudo systemctl enable "$SERVICE_NAME"
     echo "[systemd] installed service=$SERVICE_NAME config=$config_abs"
+    ;;
+  upgrade)
+    require_systemd
+    [[ -n "$AGENT" && -f "$AGENT" ]] || { echo "--agent must point to the replacement agent binary" >&2; exit 2; }
+    [[ -f "$UPGRADE_HELPER" ]] || { echo "Unix upgrade helper is missing next to adapter: $UPGRADE_HELPER" >&2; exit 1; }
+    bash "$UPGRADE_HELPER" --manager systemd --agent "$AGENT"
     ;;
   start)
     require_systemd
