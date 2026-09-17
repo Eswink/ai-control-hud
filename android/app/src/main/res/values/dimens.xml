@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="hud_screen_padding">18dp</dimen>
+    <dimen name="hud_divider_height">1dp</dimen>
+    <dimen name="hud_progress_height">8dp</dimen>
+
+    <dimen name="hud_space_2">2dp</dimen>
+    <dimen name="hud_space_3">3dp</dimen>
+    <dimen name="hud_space_4">4dp</dimen>
+    <dimen name="hud_space_5">5dp</dimen>
+    <dimen name="hud_space_6">6dp</dimen>
+    <dimen name="hud_space_8">8dp</dimen>
+    <dimen name="hud_space_10">10dp</dimen>
+    <dimen name="hud_space_12">12dp</dimen>
+    <dimen name="hud_space_13">13dp</dimen>
+    <dimen name="hud_space_14">14dp</dimen>
+    <dimen name="hud_space_16">16dp</dimen>
+    <dimen name="hud_space_18">18dp</dimen>
+    <dimen name="hud_space_20">20dp</dimen>
+    <dimen name="hud_space_24">24dp</dimen>
+
+    <dimen name="hud_text_11">11sp</dimen>
+    <dimen name="hud_text_12">12sp</dimen>
+    <dimen name="hud_text_13">13sp</dimen>
+    <dimen name="hud_text_14">14sp</dimen>
+    <dimen name="hud_text_17">17sp</dimen>
+    <dimen name="hud_text_20">20sp</dimen>
+    <dimen name="hud_text_22">22sp</dimen>
+    <dimen name="hud_text_24">24sp</dimen>
+    <dimen name="hud_text_28">28sp</dimen>
+</resources>

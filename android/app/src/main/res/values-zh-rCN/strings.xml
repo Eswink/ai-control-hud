@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI Control HUD</string>
+    <string name="setup_title">AI CONTROL HUD</string>
+    <string name="backend_server">服务端地址</string>
+    <string name="server_hint">auto.lan 或 192.168.101.103:8787</string>
+    <string name="action_connect">连接</string>
+    <string name="dashboard_title">AI CONTROL</string>
+    <string name="section_zcode">ZCODE</string>
+    <string name="section_command_code">COMMAND CODE</string>
+    <string name="section_voice_alerts">TTS 语音提醒</string>
+    <string name="voice_completed_tasks">任务完成时语音通知</string>
+    <string name="voice_failed_tasks">任务失败时语音通知</string>
+    <string name="voice_quiet_hours">静默时段 23:00–08:00</string>
+    <string name="tts_starting">TTS 正在启动</string>
+    <string name="action_test_voice">测试语音</string>
+    <string name="action_server">服务器</string>
+
+    <string name="waiting_first_snapshot">等待首个状态快照</string>
+    <string name="enter_valid_server">请输入有效的服务器地址</string>
+    <string name="testing_connection">正在测试连接…</string>
+    <string name="connection_failed">连接失败：%1$s</string>
+
+    <string name="events_not_synchronized">事件尚未同步</string>
+    <string name="events_baseline_pending">等待建立事件基线</string>
+    <string name="events_rebased">事件游标已重建 · #%1$d</string>
+    <string name="events_baseline">事件基线 · #%1$d</string>
+    <string name="events_synced">事件已同步 · #%1$d</string>
+    <string name="events_catching_up">正在补同步事件 · #%1$d / #%2$d</string>
+    <string name="event_schema_unsupported">不支持事件协议版本 %1$d</string>
+    <string name="event_sync_error">事件同步错误 · %1$s</string>
+
+    <string name="tts_ready">TTS 就绪</string>
+    <string name="tts_unavailable">TTS 启动中 / 不可用</string>
+    <string name="voice_policy_format">完成 %1$s · 失败 %2$s · 静默 %3$s</string>
+    <string name="voice_status_format">%1$s · %2$s\n%3$s</string>
+    <string name="setting_on">开启</string>
+    <string name="setting_off">关闭</string>
+
+    <string name="status_live">● 运行中</string>
+    <string name="status_degraded">● 状态降级</string>
+    <string name="status_waiting_agent">● 等待 Agent</string>
+    <string name="status_server_error">● 服务器错误</string>
+    <string name="status_offline">● 离线</string>
+    <string name="status_schema_error">协议版本不兼容</string>
+    <string name="updated_at">更新于 %1$s</string>
+
+    <string name="source_ok">健康</string>
+    <string name="source_stale">数据过期</string>
+    <string name="source_error">数据不可用</string>
+    <string name="source_disabled">未启用</string>
+    <string name="source_unknown">未知</string>
+    <string name="source_health_format">● %1$s</string>
+    <string name="source_health_message_format">● %1$s · %2$s</string>
+
+    <string name="task_running">运行中</string>
+    <string name="task_waiting">等待中</string>
+    <string name="task_failed">失败</string>
+    <string name="task_completed">已完成</string>
+    <string name="task_unknown">未知</string>
+    <string name="task_data_unavailable">任务数据不可用</string>
+    <string name="task_none_reported">当前没有任务</string>
+    <plurals name="task_more">
+        <item quantity="one">另外 %1$d 个任务</item>
+        <item quantity="other">另外 %1$d 个任务</item>
+    </plurals>
+    <string name="task_summary_unavailable">任务统计不可用</string>
+    <string name="task_summary_format">%1$d 运行中  ·  %2$d 等待中  ·  %3$d 失败</string>
+    <string name="task_changes_format">+%1$s / -%2$s</string>
+    <string name="task_activity_format">&gt; %1$s</string>
+
+    <string name="plan_unavailable">套餐 --</string>
+    <string name="plan_format">套餐  %1$s</string>
+    <string name="credit_unavailable">额度 --</string>
+    <string name="credit_remaining_format">剩余 %1$.2f %2$s</string>
+    <string name="credit_limit_format">%1$.2f / %2$.2f %3$s</string>
+    <string name="usage_unavailable">%1$s  --</string>
+    <string name="usage_reset_suffix"> · %1$s 后重置</string>
+    <string name="usage_format">%1$s  %2$.1f%%%3$s</string>
+
+    <string name="hub_waiting_detail">Hub 在线 · 等待 Windows Agent 上传状态</string>
+    <string name="source_waiting_snapshot">● 等待 · 尚无 Agent 状态</string>
+    <string name="waiting_agent_summary">等待 Windows Agent 状态</string>
+    <string name="waiting_agent_task">等待 Agent 状态</string>
+    <string name="server_http_error">%1$s · HTTP %2$d</string>
+    <string name="server_network_error">%1$s  ·  %2$s</string>
+    <string name="http_status">HTTP %1$d</string>
+    <string name="backend_schema_unsupported">服务端协议版本 %1$d 与当前 APK 不兼容</string>
+    <string name="network_error">网络错误</string>
+    <string name="cursor_persistence_failed">事件游标保存失败</string>
+
+    <string name="duration_hours_minutes">%1$d 小时 %2$02d 分</string>
+    <string name="duration_minutes_seconds">%1$d 分 %2$02d 秒</string>
+    <string name="duration_seconds">%1$d 秒</string>
+    <string name="duration_days_hours">%1$d 天 %2$02d 小时</string>
+    <string name="duration_clock">%1$02d:%2$02d:%3$02d</string>
+</resources>

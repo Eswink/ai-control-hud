@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="auto_discovering">discovering…</string>
+    <string name="usage_window_5h">5H</string>
+    <string name="usage_window_weekly">WEEK</string>
+</resources>

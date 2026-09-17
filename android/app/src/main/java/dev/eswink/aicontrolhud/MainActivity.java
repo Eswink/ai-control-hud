@@ -4,13 +4,12 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
-import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.TypedValue;
 import android.view.View;
-import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -54,11 +53,12 @@ public final class MainActivity extends Activity {
 
     private SharedPreferences preferences;
     private VoiceNotifier voiceNotifier;
+    private volatile boolean destroyed;
     private boolean polling;
     private int failureCount;
     private String serverUrl;
     private StateSnapshot lastSnapshot;
-    private String lastEventStatus = "Events not synchronized";
+    private String lastEventStatus;
     private boolean oldEventsPendingSummary;
 
     private LinearLayout setupPanel;
@@ -91,7 +91,7 @@ public final class MainActivity extends Activity {
     private final Runnable countdownRunnable = new Runnable() {
         @Override
         public void run() {
-            if (!polling) return;
+            if (!polling || destroyed) return;
             if (lastSnapshot != null) renderUsageWindows(lastSnapshot);
             mainHandler.postDelayed(this, COUNTDOWN_TICK_MS);
         }
@@ -100,15 +100,15 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.activity_main);
         bindViews();
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        lastEventStatus = getString(R.string.events_not_synchronized);
         loadVoicePreferences();
 
         voiceNotifier = new VoiceNotifier(
                 this,
-                () -> mainHandler.post(this::renderVoiceStatus)
+                () -> postToUi(this::renderVoiceStatus)
         );
 
         connectButton.setOnClickListener(view -> testAndSaveServer());
@@ -155,9 +155,20 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
+        stopPolling();
+        mainHandler.removeCallbacksAndMessages(null);
+        requestInFlight.set(false);
         if (voiceNotifier != null) voiceNotifier.shutdown();
         networkExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    private void postToUi(Runnable action) {
+        if (destroyed) return;
+        mainHandler.post(() -> {
+            if (!destroyed) action.run();
+        });
     }
 
     private void bindViews() {
@@ -206,30 +217,30 @@ public final class MainActivity extends Activity {
         setupPanel.setVisibility(View.GONE);
         dashboardPanel.setVisibility(View.VISIBLE);
         serverLabel.setText(serverUrl);
-        lastUpdateText.setText("Waiting for first snapshot");
-        liveStatus.setText("CONNECTING");
-        liveStatus.setTextColor(Color.rgb(253, 214, 99));
+        lastUpdateText.setText(R.string.waiting_first_snapshot);
+        liveStatus.setText(R.string.status_connecting);
+        liveStatus.setTextColor(color(R.color.hud_warning));
         renderVoiceStatus();
     }
 
     private void testAndSaveServer() {
         String candidate = normalizeServerUrl(serverUrlInput.getText().toString());
         if (candidate == null) {
-            setupStatus.setText("Enter a valid server address");
+            setupStatus.setText(R.string.enter_valid_server);
             return;
         }
         connectButton.setEnabled(false);
-        setupStatus.setText("Testing connection…");
+        setupStatus.setText(R.string.testing_connection);
         networkExecutor.execute(() -> {
             try {
                 client.checkHealth(candidate);
-                mainHandler.post(() -> {
+                postToUi(() -> {
                     String previousServer = preferences.getString(KEY_SERVER_URL, null);
                     SharedPreferences.Editor editor = preferences.edit().putString(KEY_SERVER_URL, candidate);
                     if (!candidate.equals(previousServer)) {
                         editor.remove(KEY_EVENT_CURSOR).remove(KEY_EVENT_CURSOR_SERVER);
                         oldEventsPendingSummary = false;
-                        lastEventStatus = "Events baseline pending";
+                        lastEventStatus = getString(R.string.events_baseline_pending);
                     }
                     editor.apply();
                     serverUrl = candidate;
@@ -238,8 +249,8 @@ public final class MainActivity extends Activity {
                     startPolling();
                 });
             } catch (Exception error) {
-                mainHandler.post(() -> {
-                    setupStatus.setText("Connection failed: " + safeError(error));
+                postToUi(() -> {
+                    setupStatus.setText(getString(R.string.connection_failed, safeError(error)));
                     connectButton.setEnabled(true);
                 });
             }
@@ -247,7 +258,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startPolling() {
-        if (polling) return;
+        if (polling || destroyed) return;
         polling = true;
         mainHandler.removeCallbacks(pollRunnable);
         mainHandler.removeCallbacks(countdownRunnable);
@@ -262,20 +273,20 @@ public final class MainActivity extends Activity {
     }
 
     private void scheduleNext(long delayMs) {
-        if (!polling) return;
+        if (!polling || destroyed) return;
         mainHandler.removeCallbacks(pollRunnable);
         mainHandler.postDelayed(pollRunnable, delayMs);
     }
 
     private void requestState() {
-        if (!polling || serverUrl == null || !requestInFlight.compareAndSet(false, true)) return;
+        if (destroyed || !polling || serverUrl == null || !requestInFlight.compareAndSet(false, true)) return;
         String targetServer = serverUrl;
         networkExecutor.execute(() -> {
             final StateSnapshot snapshot;
             try {
                 snapshot = client.fetchState(targetServer);
             } catch (StateSnapshot.IncompatibleSchemaException incompatible) {
-                mainHandler.post(() -> {
+                postToUi(() -> {
                     requestInFlight.set(false);
                     polling = false;
                     mainHandler.removeCallbacks(countdownRunnable);
@@ -283,7 +294,7 @@ public final class MainActivity extends Activity {
                 });
                 return;
             } catch (Exception error) {
-                mainHandler.post(() -> {
+                postToUi(() -> {
                     requestInFlight.set(false);
                     if (!polling || !targetServer.equals(serverUrl)) return;
                     failureCount++;
@@ -303,7 +314,7 @@ public final class MainActivity extends Activity {
 
             EventSyncResult completedEventSync = eventSync;
             Exception completedEventError = eventError;
-            mainHandler.post(() -> {
+            postToUi(() -> {
                 requestInFlight.set(false);
                 if (!polling || !targetServer.equals(serverUrl)) return;
                 failureCount = 0;
@@ -331,14 +342,17 @@ public final class MainActivity extends Activity {
                 .putString(KEY_EVENT_CURSOR_SERVER, targetServer)
                 .putLong(KEY_EVENT_CURSOR, nextCursor)
                 .commit();
-        if (!saved) throw new IOException("event cursor persistence failed");
+        if (!saved) throw new IOException(getString(R.string.cursor_persistence_failed));
         return new EventSyncResult(page, baseline, rebased, nextCursor);
     }
 
     private void handleEventSync(EventSyncResult sync) {
         if (sync.baseline) {
             oldEventsPendingSummary = false;
-            lastEventStatus = (sync.rebased ? "Events rebased" : "Events baseline") + " · #" + sync.cursor;
+            lastEventStatus = getString(
+                    sync.rebased ? R.string.events_rebased : R.string.events_baseline,
+                    sync.cursor
+            );
             renderVoiceStatus();
             return;
         }
@@ -370,18 +384,21 @@ public final class MainActivity extends Activity {
         }
 
         lastEventStatus = caughtUp
-                ? "Events synced · #" + sync.cursor
-                : "Events catching up · #" + sync.cursor + " / #" + sync.page.latestSeq;
+                ? getString(R.string.events_synced, sync.cursor)
+                : getString(R.string.events_catching_up, sync.cursor, sync.page.latestSeq);
         renderVoiceStatus();
     }
 
     private void handleEventError(Exception error) {
         if (error instanceof EventPage.IncompatibleSchemaException) {
             EventPage.IncompatibleSchemaException incompatible = (EventPage.IncompatibleSchemaException) error;
-            lastEventStatus = "Event schema " + incompatible.receivedSchema + " unsupported";
+            lastEventStatus = getString(R.string.event_schema_unsupported, incompatible.receivedSchema);
         } else {
             String name = error.getClass().getSimpleName();
-            lastEventStatus = "Event sync error · " + (name.isEmpty() ? "network" : name);
+            lastEventStatus = getString(
+                    R.string.event_sync_error,
+                    name.isEmpty() ? getString(R.string.network_error) : name
+            );
         }
         renderVoiceStatus();
     }
@@ -399,38 +416,45 @@ public final class MainActivity extends Activity {
     }
 
     private void renderVoiceStatus() {
-        if (voiceStatusText == null || testVoiceButton == null) return;
+        if (destroyed || voiceStatusText == null || testVoiceButton == null) return;
         boolean ready = voiceNotifier != null && voiceNotifier.isReady();
-        String tts = ready ? "TTS READY" : "TTS STARTING / UNAVAILABLE";
-        String policy = "complete " + onOff(completedVoiceSwitch != null && completedVoiceSwitch.isChecked())
-                + " · fail " + onOff(failedVoiceSwitch != null && failedVoiceSwitch.isChecked())
-                + " · quiet " + onOff(quietHoursSwitch != null && quietHoursSwitch.isChecked());
-        voiceStatusText.setText(tts + " · " + lastEventStatus + "\n" + policy);
+        String tts = getString(ready ? R.string.tts_ready : R.string.tts_unavailable);
+        String policy = getString(
+                R.string.voice_policy_format,
+                onOff(completedVoiceSwitch != null && completedVoiceSwitch.isChecked()),
+                onOff(failedVoiceSwitch != null && failedVoiceSwitch.isChecked()),
+                onOff(quietHoursSwitch != null && quietHoursSwitch.isChecked())
+        );
+        voiceStatusText.setText(getString(R.string.voice_status_format, tts, lastEventStatus, policy));
         testVoiceButton.setEnabled(ready);
     }
 
     private void render(StateSnapshot state) {
         lastSnapshot = state;
         boolean live = "live".equals(state.overallStatus);
-        liveStatus.setText(live ? "● LIVE" : "● DEGRADED");
-        liveStatus.setTextColor(live ? Color.rgb(129, 201, 149) : Color.rgb(253, 214, 99));
+        liveStatus.setText(live ? R.string.status_live : R.string.status_degraded);
+        liveStatus.setTextColor(color(live ? R.color.hud_success : R.color.hud_warning));
         serverLabel.setText(serverUrl);
-        lastUpdateText.setText("Updated " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date()));
+        String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+        lastUpdateText.setText(getString(R.string.updated_at, time));
 
         renderSourceHealth(zcodeHealth, state.zcodeHealth, state.zcodeMessage);
         renderSourceHealth(commandHealth, state.commandHealth, state.commandMessage);
         zcodeSummary.setText(formatSummary(state));
         renderTasks(state.tasks);
 
-        planText.setText("Plan  " + valueOrDash(state.plan));
+        planText.setText(state.plan == null || state.plan.isEmpty()
+                ? getString(R.string.plan_unavailable)
+                : getString(R.string.plan_format, state.plan));
         creditText.setText(formatCredit(state));
         renderUsageWindows(state);
     }
 
     private void renderSourceHealth(TextView view, String status, String message) {
-        String text = "● " + upper(status);
-        if (message != null && !message.isEmpty()) text += " · " + message;
-        view.setText(text);
+        String label = sourceStatusLabel(status);
+        view.setText(message == null || message.isEmpty()
+                ? getString(R.string.source_health_format, label)
+                : getString(R.string.source_health_message_format, label, message));
         view.setTextColor(sourceHealthColor(status));
     }
 
@@ -438,7 +462,7 @@ public final class MainActivity extends Activity {
         if (tasks == null) {
             hideAllTaskRows();
             taskEmpty.setVisibility(View.VISIBLE);
-            taskEmpty.setText("Task data unavailable");
+            taskEmpty.setText(R.string.task_data_unavailable);
             taskOverflow.setVisibility(View.GONE);
             return;
         }
@@ -446,7 +470,7 @@ public final class MainActivity extends Activity {
         if (tasks.isEmpty()) {
             hideAllTaskRows();
             taskEmpty.setVisibility(View.VISIBLE);
-            taskEmpty.setText("No tasks reported");
+            taskEmpty.setText(R.string.task_none_reported);
             taskOverflow.setVisibility(View.GONE);
             return;
         }
@@ -469,7 +493,7 @@ public final class MainActivity extends Activity {
 
         int hidden = display.size() - visibleCount;
         if (hidden > 0) {
-            taskOverflow.setText("+" + hidden + " more task" + (hidden == 1 ? "" : "s"));
+            taskOverflow.setText(getResources().getQuantityString(R.plurals.task_more, hidden, hidden));
             taskOverflow.setVisibility(View.VISIBLE);
         } else {
             taskOverflow.setVisibility(View.GONE);
@@ -487,45 +511,50 @@ public final class MainActivity extends Activity {
     private TaskRow createTaskRow() {
         LinearLayout container = new LinearLayout(this);
         container.setOrientation(LinearLayout.VERTICAL);
-        container.setPadding(dp(12), dp(10), dp(12), dp(10));
+        container.setPadding(
+                dimenPx(R.dimen.hud_space_12),
+                dimenPx(R.dimen.hud_space_10),
+                dimenPx(R.dimen.hud_space_12),
+                dimenPx(R.dimen.hud_space_10)
+        );
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        params.topMargin = dp(8);
+        params.topMargin = dimenPx(R.dimen.hud_space_8);
         container.setLayoutParams(params);
 
         GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.rgb(16, 23, 32));
-        background.setCornerRadius(dp(10));
-        background.setStroke(dp(1), Color.rgb(39, 49, 61));
+        background.setColor(color(R.color.hud_surface));
+        background.setCornerRadius(dimenPx(R.dimen.hud_space_10));
+        background.setStroke(dimenPx(R.dimen.hud_divider_height), color(R.color.hud_border));
         container.setBackground(background);
 
         TextView status = new TextView(this);
-        status.setTextSize(11);
+        setTextSize(status, R.dimen.hud_text_11);
         status.setTypeface(null, android.graphics.Typeface.BOLD);
 
         TextView title = new TextView(this);
-        title.setTextColor(Color.rgb(241, 243, 244));
-        title.setTextSize(17);
+        title.setTextColor(color(R.color.hud_text_primary));
+        setTextSize(title, R.dimen.hud_text_17);
         title.setMaxLines(2);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        titleParams.topMargin = dp(3);
+        titleParams.topMargin = dimenPx(R.dimen.hud_space_3);
         title.setLayoutParams(titleParams);
 
         TextView meta = new TextView(this);
-        meta.setTextColor(Color.rgb(154, 160, 166));
-        meta.setTextSize(12);
+        meta.setTextColor(color(R.color.hud_text_secondary));
+        setTextSize(meta, R.dimen.hud_text_12);
         meta.setMaxLines(3);
         LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        metaParams.topMargin = dp(4);
+        metaParams.topMargin = dimenPx(R.dimen.hud_space_4);
         meta.setLayoutParams(metaParams);
 
         container.addView(status);
@@ -535,7 +564,7 @@ public final class MainActivity extends Activity {
     }
 
     private void renderTaskRow(TaskRow row, StateSnapshot.TaskItem task) {
-        row.status.setText(upper(task.status));
+        row.status.setText(taskStatusLabel(task.status));
         row.status.setTextColor(taskColor(task.status));
         row.title.setText(task.title);
         row.meta.setText(formatTaskMeta(task));
@@ -548,12 +577,12 @@ public final class MainActivity extends Activity {
         if (task.additions != null || task.deletions != null) {
             String additions = task.additions == null ? "?" : String.valueOf(task.additions);
             String deletions = task.deletions == null ? "?" : String.valueOf(task.deletions);
-            parts.add("+" + additions + " / -" + deletions);
+            parts.add(getString(R.string.task_changes_format, additions, deletions));
         }
         String meta = join(parts, " · ");
         if (task.activity != null) {
             if (!meta.isEmpty()) meta += "\n";
-            meta += "> " + task.activity;
+            meta += getString(R.string.task_activity_format, task.activity);
         }
         return meta;
     }
@@ -563,8 +592,8 @@ public final class MainActivity extends Activity {
     }
 
     private void renderUsageWindows(StateSnapshot state) {
-        renderWindow(state.fiveHour, fiveHourLabel, fiveHourProgress, "5H");
-        renderWindow(state.weekly, weeklyLabel, weeklyProgress, "WEEK");
+        renderWindow(state.fiveHour, fiveHourLabel, fiveHourProgress, getString(R.string.usage_window_5h));
+        renderWindow(state.weekly, weeklyLabel, weeklyProgress, getString(R.string.usage_window_weekly));
     }
 
     private void renderWindow(
@@ -574,98 +603,84 @@ public final class MainActivity extends Activity {
             String fallbackName
     ) {
         if (window == null || window.usedPercent == null) {
-            label.setText(fallbackName + "  --");
+            label.setText(getString(R.string.usage_unavailable, fallbackName));
             progress.setProgress(0);
-            progress.setProgressTintList(ColorStateList.valueOf(Color.rgb(95, 99, 104)));
+            progress.setProgressTintList(ColorStateList.valueOf(color(R.color.hud_progress_muted)));
             return;
         }
 
         int percent = Math.max(0, Math.min(100, (int) Math.round(window.usedPercent)));
-        String reset = window.resetAt == null ? "" : " · reset " + formatResetCountdown(window.resetAt);
-        label.setText(String.format(Locale.US, "%s  %.1f%%%s", fallbackName, window.usedPercent, reset));
+        String reset = window.resetAt == null
+                ? ""
+                : getString(R.string.usage_reset_suffix, formatResetCountdown(window.resetAt));
+        label.setText(getString(R.string.usage_format, fallbackName, window.usedPercent, reset));
         progress.setProgress(percent);
         progress.setProgressTintList(ColorStateList.valueOf(usageColor(window.usedPercent)));
     }
 
     private String formatSummary(StateSnapshot state) {
         if (state.running == null || state.waiting == null || state.failed == null || state.completed == null) {
-            return "Task summary unavailable";
+            return getString(R.string.task_summary_unavailable);
         }
-        return String.format(
-                Locale.US,
-                "%d running  ·  %d waiting  ·  %d failed",
-                state.running,
-                state.waiting,
-                state.failed
-        );
+        return getString(R.string.task_summary_format, state.running, state.waiting, state.failed);
     }
 
     private String formatCredit(StateSnapshot state) {
-        if (state.creditRemaining == null) return "Credit --";
+        if (state.creditRemaining == null) return getString(R.string.credit_unavailable);
+        String unit = valueOrDash(state.creditUnit);
         if (state.creditLimit == null) {
-            return String.format(
-                    Locale.US,
-                    "%.2f %s remaining",
-                    state.creditRemaining,
-                    valueOrDash(state.creditUnit)
-            );
+            return getString(R.string.credit_remaining_format, state.creditRemaining, unit);
         }
-        return String.format(
-                Locale.US,
-                "%.2f / %.2f %s",
-                state.creditRemaining,
-                state.creditLimit,
-                valueOrDash(state.creditUnit)
-        );
+        return getString(R.string.credit_limit_format, state.creditRemaining, state.creditLimit, unit);
     }
 
     private void showOffline(Exception error) {
         if (error instanceof StateClient.SnapshotUnavailableException) {
             failureCount = 0;
             lastSnapshot = null;
-            liveStatus.setText("● WAITING FOR AGENT");
-            liveStatus.setTextColor(Color.rgb(253, 214, 99));
+            liveStatus.setText(R.string.status_waiting_agent);
+            liveStatus.setTextColor(color(R.color.hud_warning));
             serverLabel.setText(serverUrl);
-            lastUpdateText.setText("Hub online · waiting for Windows Agent snapshot");
+            lastUpdateText.setText(R.string.hub_waiting_detail);
 
-            zcodeHealth.setText("● WAITING · no Agent snapshot");
-            zcodeHealth.setTextColor(Color.rgb(253, 214, 99));
-            zcodeSummary.setText("Waiting for Windows Agent snapshot");
+            zcodeHealth.setText(R.string.source_waiting_snapshot);
+            zcodeHealth.setTextColor(color(R.color.hud_warning));
+            zcodeSummary.setText(R.string.waiting_agent_summary);
             hideAllTaskRows();
             taskEmpty.setVisibility(View.VISIBLE);
-            taskEmpty.setText("Waiting for Agent snapshot");
+            taskEmpty.setText(R.string.waiting_agent_task);
             taskOverflow.setVisibility(View.GONE);
 
-            commandHealth.setText("● WAITING · no Agent snapshot");
-            commandHealth.setTextColor(Color.rgb(253, 214, 99));
-            planText.setText("Plan --");
-            creditText.setText("Credit --");
-            fiveHourLabel.setText("5H --");
-            weeklyLabel.setText("WEEK --");
+            commandHealth.setText(R.string.source_waiting_snapshot);
+            commandHealth.setTextColor(color(R.color.hud_warning));
+            planText.setText(R.string.plan_unavailable);
+            creditText.setText(R.string.credit_unavailable);
+            fiveHourLabel.setText(R.string.five_hour_unavailable);
+            weeklyLabel.setText(R.string.weekly_unavailable);
             fiveHourProgress.setProgress(0);
             weeklyProgress.setProgress(0);
-            fiveHourProgress.setProgressTintList(ColorStateList.valueOf(Color.rgb(95, 99, 104)));
-            weeklyProgress.setProgressTintList(ColorStateList.valueOf(Color.rgb(95, 99, 104)));
+            fiveHourProgress.setProgressTintList(ColorStateList.valueOf(color(R.color.hud_progress_muted)));
+            weeklyProgress.setProgressTintList(ColorStateList.valueOf(color(R.color.hud_progress_muted)));
             return;
         }
 
         if (error instanceof StateClient.HttpStatusException) {
             StateClient.HttpStatusException status = (StateClient.HttpStatusException) error;
-            liveStatus.setText("● SERVER ERROR");
-            liveStatus.setTextColor(Color.rgb(242, 139, 130));
-            serverLabel.setText(serverUrl + " · HTTP " + status.statusCode);
+            liveStatus.setText(R.string.status_server_error);
+            liveStatus.setTextColor(color(R.color.hud_error));
+            serverLabel.setText(getString(R.string.server_http_error, serverUrl, status.statusCode));
             return;
         }
 
-        liveStatus.setText("● OFFLINE");
-        liveStatus.setTextColor(Color.rgb(242, 139, 130));
-        serverLabel.setText(serverUrl + "  ·  " + safeError(error));
+        liveStatus.setText(R.string.status_offline);
+        liveStatus.setTextColor(color(R.color.hud_error));
+        serverLabel.setText(getString(R.string.server_network_error, serverUrl, safeError(error)));
     }
 
     private void showCompatibilityError(int schema) {
-        liveStatus.setText("SCHEMA ERROR");
-        liveStatus.setTextColor(Color.rgb(242, 139, 130));
-        serverLabel.setText("Backend schema " + schema + " is not supported by this APK");
+        liveStatus.setText(R.string.status_schema_error);
+        liveStatus.setTextColor(color(R.color.hud_error));
+        serverLabel.setText(getString(R.string.backend_schema_unsupported, schema));
     }
 
     private static long backoffMillis(int failures) {
@@ -682,25 +697,37 @@ public final class MainActivity extends Activity {
         return value;
     }
 
-    private static String safeError(Exception error) {
+    private String safeError(Exception error) {
         if (error instanceof StateSnapshot.IncompatibleSchemaException) return error.getMessage();
         if (error instanceof StateClient.HttpStatusException) {
-            return "HTTP " + ((StateClient.HttpStatusException) error).statusCode;
+            return getString(R.string.http_status, ((StateClient.HttpStatusException) error).statusCode);
         }
         String name = error.getClass().getSimpleName();
-        return name.isEmpty() ? "network error" : name;
+        return name.isEmpty() ? getString(R.string.network_error) : name;
     }
 
-    private static String upper(String value) {
-        return value == null ? "UNKNOWN" : value.toUpperCase(Locale.US);
+    private String sourceStatusLabel(String status) {
+        if ("ok".equals(status)) return getString(R.string.source_ok);
+        if ("stale".equals(status)) return getString(R.string.source_stale);
+        if ("error".equals(status)) return getString(R.string.source_error);
+        if ("disabled".equals(status)) return getString(R.string.source_disabled);
+        return getString(R.string.source_unknown);
     }
 
-    private static String valueOrDash(String value) {
-        return value == null || value.isEmpty() ? "--" : value;
+    private String taskStatusLabel(String status) {
+        if ("running".equals(status)) return getString(R.string.task_running);
+        if ("waiting".equals(status)) return getString(R.string.task_waiting);
+        if ("failed".equals(status)) return getString(R.string.task_failed);
+        if ("completed".equals(status)) return getString(R.string.task_completed);
+        return getString(R.string.task_unknown);
     }
 
-    private static String onOff(boolean enabled) {
-        return enabled ? "on" : "off";
+    private String valueOrDash(String value) {
+        return value == null || value.isEmpty() ? getString(R.string.placeholder_dash) : value;
+    }
+
+    private String onOff(boolean enabled) {
+        return getString(enabled ? R.string.setting_on : R.string.setting_off);
     }
 
     private static int taskPriority(String status) {
@@ -712,46 +739,46 @@ public final class MainActivity extends Activity {
         return 5;
     }
 
-    private static int taskColor(String status) {
-        if ("failed".equals(status)) return Color.rgb(242, 139, 130);
-        if ("running".equals(status)) return Color.rgb(129, 201, 149);
-        if ("waiting".equals(status)) return Color.rgb(253, 214, 99);
-        return Color.rgb(154, 160, 166);
+    private int taskColor(String status) {
+        if ("failed".equals(status)) return color(R.color.hud_error);
+        if ("running".equals(status)) return color(R.color.hud_success);
+        if ("waiting".equals(status)) return color(R.color.hud_warning);
+        return color(R.color.hud_text_secondary);
     }
 
-    private static int sourceHealthColor(String status) {
-        if ("ok".equals(status)) return Color.rgb(129, 201, 149);
-        if ("stale".equals(status)) return Color.rgb(253, 214, 99);
-        if ("error".equals(status)) return Color.rgb(242, 139, 130);
-        return Color.rgb(154, 160, 166);
+    private int sourceHealthColor(String status) {
+        if ("ok".equals(status)) return color(R.color.hud_success);
+        if ("stale".equals(status)) return color(R.color.hud_warning);
+        if ("error".equals(status)) return color(R.color.hud_error);
+        return color(R.color.hud_text_secondary);
     }
 
-    private static int usageColor(double percent) {
-        if (percent >= 90.0) return Color.rgb(242, 139, 130);
-        if (percent >= 70.0) return Color.rgb(253, 214, 99);
-        return Color.rgb(138, 180, 248);
+    private int usageColor(double percent) {
+        if (percent >= 90.0) return color(R.color.hud_error);
+        if (percent >= 70.0) return color(R.color.hud_warning);
+        return color(R.color.hud_accent);
     }
 
-    private static String formatDuration(int totalSeconds) {
+    private String formatDuration(int totalSeconds) {
         int safe = Math.max(0, totalSeconds);
         int hours = safe / 3600;
         int minutes = (safe % 3600) / 60;
         int seconds = safe % 60;
-        if (hours > 0) return String.format(Locale.US, "%dh %02dm", hours, minutes);
-        if (minutes > 0) return String.format(Locale.US, "%dm %02ds", minutes, seconds);
-        return seconds + "s";
+        if (hours > 0) return getString(R.string.duration_hours_minutes, hours, minutes);
+        if (minutes > 0) return getString(R.string.duration_minutes_seconds, minutes, seconds);
+        return getString(R.string.duration_seconds, seconds);
     }
 
-    private static String formatResetCountdown(String isoTimestamp) {
+    private String formatResetCountdown(String isoTimestamp) {
         Long resetMillis = IsoTime.parseMillis(isoTimestamp);
-        if (resetMillis == null) return "--";
+        if (resetMillis == null) return getString(R.string.placeholder_dash);
         long remainingSeconds = Math.max(0L, (resetMillis - System.currentTimeMillis()) / 1000L);
         long days = remainingSeconds / 86400L;
         long hours = (remainingSeconds % 86400L) / 3600L;
         long minutes = (remainingSeconds % 3600L) / 60L;
         long seconds = remainingSeconds % 60L;
-        if (days > 0) return String.format(Locale.US, "%dd %02dh", days, hours);
-        return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds);
+        if (days > 0) return getString(R.string.duration_days_hours, days, hours);
+        return getString(R.string.duration_clock, hours, minutes, seconds);
     }
 
     private static String join(List<String> values, String separator) {
@@ -763,8 +790,16 @@ public final class MainActivity extends Activity {
         return result.toString();
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+    private int color(int resourceId) {
+        return getColor(resourceId);
+    }
+
+    private int dimenPx(int resourceId) {
+        return getResources().getDimensionPixelSize(resourceId);
+    }
+
+    private void setTextSize(TextView view, int resourceId) {
+        view.setTextSize(TypedValue.COMPLEX_UNIT_PX, getResources().getDimension(resourceId));
     }
 
     private void enterImmersiveMode() {

@@ -20,6 +20,7 @@ public final class ServerAddressView extends TextView {
     @Override
     public void setText(CharSequence text, BufferType type) {
         String raw = text == null ? null : text.toString();
-        super.setText(StateClient.displayServer(raw), type);
+        String discovering = getContext().getString(R.string.auto_discovering);
+        super.setText(StateClient.displayServer(raw, discovering), type);
     }
 }

@@ -100,12 +100,17 @@ final class StateClient {
     }
 
     static String displayServer(String configuredText) {
+        return displayServer(configuredText, "discovering…");
+    }
+
+    static String displayServer(String configuredText, String discoveringText) {
         if (configuredText == null) return "";
         if (!configuredText.startsWith(AUTO_BASE_URL)) return configuredText;
         String suffix = configuredText.substring(AUTO_BASE_URL.length());
         String resolved = lastResolvedAutoBaseUrl;
         if (resolved == null || resolved.isEmpty()) {
-            return "AUTO · discovering…" + suffix;
+            String label = discoveringText == null || discoveringText.isEmpty() ? "discovering…" : discoveringText;
+            return "AUTO · " + label + suffix;
         }
         return "AUTO · " + resolved + suffix;
     }
