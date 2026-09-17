@@ -388,6 +388,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+
       - name: Resolve publish target
         shell: bash
         env:
