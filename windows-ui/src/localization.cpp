@@ -2,7 +2,6 @@
 
 #include <Windows.h>
 
-#include <array>
 #include <cwchar>
 
 namespace aicontrol::ui {
@@ -30,6 +29,14 @@ std::wstring_view En(TextId id) noexcept {
         case TextId::AgentVersion: return L"Agent version";
         case TextId::CurrentTask: return L"Current task";
         case TextId::NoCurrentTask: return L"No running or waiting task";
+        case TextId::TaskList: return L"Task list";
+        case TextId::UsageWindows: return L"Usage windows";
+        case TextId::Workspace: return L"Workspace";
+        case TextId::ResetAt: return L"Reset";
+        case TextId::OutboxBaselines: return L"Task baseline rows";
+        case TextId::OutboxCompacted: return L"Compacted task rows";
+        case TextId::LocalApi: return L"Local API";
+        case TextId::NoData: return L"No data available";
         case TextId::CommandCode: return L"CommandCode";
         case TextId::ZCode: return L"ZCode";
         case TextId::Plan: return L"Plan";
@@ -71,6 +78,14 @@ std::wstring_view Zh(TextId id) noexcept {
         case TextId::AgentVersion: return L"Agent 版本";
         case TextId::CurrentTask: return L"当前任务";
         case TextId::NoCurrentTask: return L"当前没有运行或等待中的任务";
+        case TextId::TaskList: return L"任务列表";
+        case TextId::UsageWindows: return L"额度窗口";
+        case TextId::Workspace: return L"工作区";
+        case TextId::ResetAt: return L"重置时间";
+        case TextId::OutboxBaselines: return L"任务基线行";
+        case TextId::OutboxCompacted: return L"已压缩任务行";
+        case TextId::LocalApi: return L"本机 API";
+        case TextId::NoData: return L"暂无可用数据";
         case TextId::CommandCode: return L"CommandCode";
         case TextId::ZCode: return L"ZCode";
         case TextId::Plan: return L"套餐";
