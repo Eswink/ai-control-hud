@@ -17,7 +17,7 @@ inline float StackedTaskCardHeight(float availableHeight) noexcept {
 
 inline std::size_t CommandUsageRowCount(float cardHeight) noexcept {
     if (cardHeight >= 250.0f) return 2;
-    if (cardHeight >= 185.0f) return 1;
+    if (cardHeight >= 205.0f) return 1;
     return 0;
 }
 
