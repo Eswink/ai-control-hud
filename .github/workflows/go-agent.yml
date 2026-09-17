@@ -9,15 +9,19 @@ on:
       - 'scripts/ai-control-agent-launchd.sh'
       - 'scripts/ai-control-agent-unix-upgrade.sh'
       - 'scripts/ci-agent-runtime-smoke.py'
+      - 'scripts/ci-agent-resource-smoke.ps1'
       - 'scripts/ci-agent-systemd-identity-smoke.sh'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/ci-g7-unix-service-smoke.sh'
       - 'scripts/fixtures/broken-service-agent.go'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
+      - 'docs/AGENT_DIAGNOSTICS.md'
+      - 'docs/AGENT_OUTBOX_HYGIENE.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - 'docs/G7_CROSS_PLATFORM.md'
       - 'docs/HUB_V2_PLAN.md'
+      - 'docs/RESOURCE_BUDGETS.md'
       - '.github/workflows/go-agent.yml'
   pull_request:
     paths:
@@ -27,15 +31,19 @@ on:
       - 'scripts/ai-control-agent-launchd.sh'
       - 'scripts/ai-control-agent-unix-upgrade.sh'
       - 'scripts/ci-agent-runtime-smoke.py'
+      - 'scripts/ci-agent-resource-smoke.ps1'
       - 'scripts/ci-agent-systemd-identity-smoke.sh'
       - 'scripts/ci-g6-windows-service-smoke.ps1'
       - 'scripts/ci-g7-unix-service-smoke.sh'
       - 'scripts/fixtures/broken-service-agent.go'
       - 'scripts/g4_state_db.py'
       - 'docs/API.md'
+      - 'docs/AGENT_DIAGNOSTICS.md'
+      - 'docs/AGENT_OUTBOX_HYGIENE.md'
       - 'docs/G6_WINDOWS_SERVICE.md'
       - 'docs/G7_CROSS_PLATFORM.md'
       - 'docs/HUB_V2_PLAN.md'
+      - 'docs/RESOURCE_BUDGETS.md'
       - '.github/workflows/go-agent.yml'
   workflow_dispatch:
 
@@ -102,6 +110,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: python .\scripts\ci-agent-runtime-smoke.py --agent .\agent\ai-control-agent.exe
+
+      - name: Windows Agent resource growth smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\ci-agent-resource-smoke.ps1 -Agent ".\agent\ai-control-agent.exe" -Requests 1500
 
       - name: Native runtime smoke (Unix)
         if: runner.os != 'Windows'
