@@ -5,6 +5,8 @@ on:
     paths:
       - 'windows-ui/**'
       - 'scripts/ci-windows-native-ui.py'
+      - 'scripts/ci-windows-ui-artifact-scan.py'
+      - 'scripts/ci-windows-ui-resource-smoke.ps1'
       - '.github/workflows/windows-ui.yml'
       - 'agent/internal/api/**'
       - 'agent/internal/domain/**'
@@ -12,6 +14,8 @@ on:
     paths:
       - 'windows-ui/**'
       - 'scripts/ci-windows-native-ui.py'
+      - 'scripts/ci-windows-ui-artifact-scan.py'
+      - 'scripts/ci-windows-ui-resource-smoke.ps1'
       - '.github/workflows/windows-ui.yml'
       - 'agent/internal/api/**'
       - 'agent/internal/domain/**'
@@ -47,31 +51,35 @@ jobs:
         shell: pwsh
         run: ctest --test-dir build/windows-ui -C Release --output-on-failure
 
-      - name: Native process startup smoke
+      - name: Prove native artifact secret scanner
         shell: pwsh
         run: |
-          $exe = (Resolve-Path 'build/windows-ui/Release/ai-control-agent-ui.exe').Path
-          $process = Start-Process -FilePath $exe -PassThru
-          try {
-            Start-Sleep -Seconds 3
-            $process.Refresh()
-            if ($process.HasExited) {
-              throw "native UI exited during startup smoke with code $($process.ExitCode)"
-            }
-            $item = Get-Item $exe
-            Write-Host "[windows-ui-smoke] alive pid=$($process.Id) binary_bytes=$($item.Length)"
+          $probe = 'build/windows-ui/synthetic-secret.bin'
+          [System.IO.File]::WriteAllText($probe, 'HUD_HUB_AGENT_TOKEN')
+          & python scripts/ci-windows-ui-artifact-scan.py $probe
+          if ($LASTEXITCODE -eq 0) {
+            throw 'synthetic credential marker was not detected'
           }
-          finally {
-            if (-not $process.HasExited) {
-              Stop-Process -Id $process.Id -Force
-              $process.WaitForExit()
-            }
-          }
+          Remove-Item -LiteralPath $probe -Force
+          Write-Host '[windows-ui-artifact-scan] synthetic failure path verified'
 
-      - name: Upload native Windows UI
+      - name: Scan native Windows UI artifact
+        shell: pwsh
+        run: python scripts/ci-windows-ui-artifact-scan.py build/windows-ui/Release/ai-control-agent-ui.exe
+
+      - name: Native startup resource and leak smoke
+        shell: pwsh
+        run: |
+          ./scripts/ci-windows-ui-resource-smoke.ps1 `
+            -Exe 'build/windows-ui/Release/ai-control-agent-ui.exe' `
+            -MetricsPath 'build/windows-ui/resource-metrics.json'
+
+      - name: Upload native Windows UI delivery bundle
         uses: actions/upload-artifact@v7
         with:
           name: ai-control-agent-ui-windows-amd64
-          path: build/windows-ui/Release/ai-control-agent-ui.exe
+          path: |
+            build/windows-ui/Release/ai-control-agent-ui.exe
+            build/windows-ui/resource-metrics.json
           if-no-files-found: error
           retention-days: 30
