@@ -11,7 +11,7 @@ SYSTEMCTL_BIN="${AI_CONTROL_AGENT_SYSTEMCTL:-systemctl}"
 LAUNCHCTL_BIN="${AI_CONTROL_AGENT_LAUNCHCTL:-launchctl}"
 SUDO_BIN="${AI_CONTROL_AGENT_SUDO-sudo}"
 BINARY_OWNER="${AI_CONTROL_AGENT_BINARY_OWNER:-root}"
-BINARY_GROUP="${AI_CONTROL_AGENT_BINARY_GROUP:-root}"
+BINARY_GROUP="${AI_CONTROL_AGENT_BINARY_GROUP:-}"
 STABLE_CHECKS="${AI_CONTROL_AGENT_STABLE_CHECKS:-4}"
 STABLE_DELAY="${AI_CONTROL_AGENT_STABLE_DELAY:-0.5}"
 
@@ -49,7 +49,12 @@ fail() {
 }
 
 case "$MANAGER" in
-  systemd|launchd) ;;
+  systemd)
+    [[ -n "$BINARY_GROUP" ]] || BINARY_GROUP="root"
+    ;;
+  launchd)
+    [[ -n "$BINARY_GROUP" ]] || BINARY_GROUP="wheel"
+    ;;
   *) echo "--manager must be systemd or launchd" >&2; exit 2 ;;
 esac
 [[ "$STABLE_CHECKS" =~ ^[1-9][0-9]*$ ]] || fail "stable check count is invalid"
@@ -209,5 +214,5 @@ if [[ "$was_active" -eq 1 ]]; then
 fi
 
 run_root rm -f "$backup"
-echo "[agent-upgrade] upgraded=true version=$candidate_version manager=$MANAGER state=$state binary=$BINARY_PATH"
+echo "[agent-upgrade] upgraded=true version=$candidate_version manager=$MANAGER state=$state binary=$BINARY_PATH owner=$BINARY_OWNER group=$BINARY_GROUP"
 echo "[agent-upgrade] preserved=machine-config,commandcode-secret,hub-secret,service-definition"
