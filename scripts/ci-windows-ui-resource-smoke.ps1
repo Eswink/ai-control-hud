@@ -69,7 +69,7 @@ function Delta-MiB([int64]$After, [int64]$Before) {
     return [Math]::Round(($After - $Before) / 1MB, 2)
 }
 
-function Assert-Growth([hashtable]$After, [hashtable]$Before, [string]$Phase) {
+function Assert-Growth([System.Collections.IDictionary]$After, [System.Collections.IDictionary]$Before, [string]$Phase) {
     $workingSetGrowthMiB = Delta-MiB $After.workingSet $Before.workingSet
     $privateGrowthMiB = Delta-MiB $After.privateBytes $Before.privateBytes
     $handleGrowth = $After.handles - $Before.handles
