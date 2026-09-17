@@ -49,6 +49,7 @@ case "$CONFIG_PATH" in
   /*) ;;
   *) CONFIG_PATH="$PWD/$CONFIG_PATH" ;;
 esac
+OUTBOX_PATH="$(dirname "$CONFIG_PATH")/events.sqlite3"
 
 require_launchd() {
   [[ "$(uname -s)" == "Darwin" ]] || { echo "launchd adapter requires macOS" >&2; exit 1; }
@@ -95,6 +96,8 @@ write_plist() {
   plutil -insert ProgramArguments.1 -string run "$output"
   plutil -insert ProgramArguments.2 -string --config "$output"
   plutil -insert ProgramArguments.3 -string "$CONFIG_PATH" "$output"
+  plutil -insert EnvironmentVariables -dictionary "$output"
+  plutil -insert EnvironmentVariables.AI_CONTROL_HUB_OUTBOX -string "$OUTBOX_PATH" "$output"
   plutil -insert RunAtLoad -bool true "$output"
   plutil -insert KeepAlive -dictionary "$output"
   plutil -insert KeepAlive.SuccessfulExit -bool false "$output"
@@ -146,7 +149,7 @@ case "$ACTION" in
     write_plist "$plist_tmp"
     sudo install -m 0644 "$plist_tmp" "$PLIST_PATH"
     sudo plutil -lint "$PLIST_PATH"
-    echo "[launchd] installed label=$LABEL config=$CONFIG_PATH"
+    echo "[launchd] installed label=$LABEL config=$CONFIG_PATH outbox=$OUTBOX_PATH"
     ;;
   upgrade)
     require_launchd
@@ -193,13 +196,14 @@ case "$ACTION" in
     sudo rm -f "$PLIST_PATH"
     if [[ "$PURGE" -eq 1 ]]; then
       [[ -z "$secret_path" ]] || sudo rm -f "$secret_path"
+      sudo rm -f "$OUTBOX_PATH" "$OUTBOX_PATH-wal" "$OUTBOX_PATH-shm"
       sudo rm -f "$CONFIG_PATH"
       sudo rmdir "$(dirname "$CONFIG_PATH")" 2>/dev/null || true
       sudo rm -f "$INSTALL_DIR/ai-control-agent"
       sudo rmdir "$INSTALL_DIR" 2>/dev/null || true
       echo "[launchd] removed and purged"
     else
-      echo "[launchd] removed; config/SecretStore and installed binary preserved"
+      echo "[launchd] removed; config/SecretStore, event outbox, and installed binary preserved"
     fi
     ;;
   *)
