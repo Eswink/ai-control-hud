@@ -14,6 +14,8 @@ BINARY_OWNER="${AI_CONTROL_AGENT_BINARY_OWNER:-root}"
 BINARY_GROUP="${AI_CONTROL_AGENT_BINARY_GROUP:-}"
 STABLE_CHECKS="${AI_CONTROL_AGENT_STABLE_CHECKS:-4}"
 STABLE_DELAY="${AI_CONTROL_AGENT_STABLE_DELAY:-0.5}"
+LAUNCHD_TRANSITION_ATTEMPTS="${AI_CONTROL_AGENT_LAUNCHD_TRANSITION_ATTEMPTS:-40}"
+LAUNCHD_TRANSITION_DELAY="${AI_CONTROL_AGENT_LAUNCHD_TRANSITION_DELAY:-0.25}"
 
 usage() {
   cat <<'EOF'
@@ -58,6 +60,7 @@ case "$MANAGER" in
   *) echo "--manager must be systemd or launchd" >&2; exit 2 ;;
 esac
 [[ "$STABLE_CHECKS" =~ ^[1-9][0-9]*$ ]] || fail "stable check count is invalid"
+[[ "$LAUNCHD_TRANSITION_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || fail "launchd transition attempt count is invalid"
 [[ -n "$CANDIDATE" && -f "$CANDIDATE" ]] || {
   echo "--agent must point to a candidate ai-control-agent executable" >&2
   exit 2
@@ -74,6 +77,10 @@ installed_abs="$(cd "$(dirname "$BINARY_PATH")" && pwd)/$(basename "$BINARY_PATH
 candidate_version="$("$CANDIDATE_ABS" version 2>/dev/null)" || fail "candidate failed 'version' preflight"
 [[ -n "$candidate_version" && ${#candidate_version} -le 256 && "$candidate_version" != *$'\n'* && "$candidate_version" != *$'\r'* ]] || \
   fail "candidate returned an invalid version string"
+
+launchd_loaded() {
+  run_root "$LAUNCHCTL_BIN" print "system/$LAUNCHD_LABEL" >/dev/null 2>&1
+}
 
 service_state() {
   case "$MANAGER" in
@@ -97,15 +104,44 @@ service_state() {
 
 start_service() {
   case "$MANAGER" in
-    systemd) run_root "$SYSTEMCTL_BIN" start "$SYSTEMD_SERVICE" ;;
-    launchd) run_root "$LAUNCHCTL_BIN" bootstrap system "$LAUNCHD_PLIST" ;;
+    systemd)
+      run_root "$SYSTEMCTL_BIN" start "$SYSTEMD_SERVICE"
+      ;;
+    launchd)
+      local attempt
+      for ((attempt = 1; attempt <= LAUNCHD_TRANSITION_ATTEMPTS; attempt++)); do
+        if run_root "$LAUNCHCTL_BIN" bootstrap system "$LAUNCHD_PLIST"; then
+          return 0
+        fi
+        if service_running_now; then
+          return 0
+        fi
+        sleep "$LAUNCHD_TRANSITION_DELAY"
+      done
+      return 1
+      ;;
   esac
 }
 
 stop_service() {
   case "$MANAGER" in
-    systemd) run_root "$SYSTEMCTL_BIN" stop "$SYSTEMD_SERVICE" ;;
-    launchd) run_root "$LAUNCHCTL_BIN" bootout "system/$LAUNCHD_LABEL" ;;
+    systemd)
+      run_root "$SYSTEMCTL_BIN" stop "$SYSTEMD_SERVICE"
+      ;;
+    launchd)
+      local attempt
+      if ! run_root "$LAUNCHCTL_BIN" bootout "system/$LAUNCHD_LABEL"; then
+        launchd_loaded && return 1
+        return 0
+      fi
+      for ((attempt = 1; attempt <= LAUNCHD_TRANSITION_ATTEMPTS; attempt++)); do
+        if ! launchd_loaded; then
+          return 0
+        fi
+        sleep "$LAUNCHD_TRANSITION_DELAY"
+      done
+      return 1
+      ;;
   esac
 }
 
