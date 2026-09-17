@@ -94,4 +94,36 @@ inline std::optional<double> CreditRemainingPercent(const DashboardSnapshot& sna
     return std::clamp(value, 0.0, 100.0);
 }
 
+inline bool DisplayEquivalent(const DashboardSnapshot& left, const DashboardSnapshot& right) noexcept {
+    if (left.connection != right.connection || left.service != right.service || left.error != right.error ||
+        left.overallStatus != right.overallStatus || left.serverVersion != right.serverVersion ||
+        left.agentVersion != right.agentVersion || left.zcodeStatus != right.zcodeStatus ||
+        left.commandCodeStatus != right.commandCodeStatus || left.plan != right.plan ||
+        left.creditRemaining != right.creditRemaining || left.creditLimit != right.creditLimit ||
+        left.creditUnit != right.creditUnit || left.usageWindows.size() != right.usageWindows.size() ||
+        left.tasks.size() != right.tasks.size() || left.outbox.available != right.outbox.available ||
+        left.outbox.status != right.outbox.status || left.outbox.pendingEvents != right.outbox.pendingEvents ||
+        left.outbox.taskBaselineRows != right.outbox.taskBaselineRows ||
+        left.outbox.compactedTaskRows != right.outbox.compactedTaskRows) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < left.usageWindows.size(); ++i) {
+        const auto& a = left.usageWindows[i];
+        const auto& b = right.usageWindows[i];
+        if (a.name != b.name || a.usedPercent != b.usedPercent || a.resetAt != b.resetAt) return false;
+    }
+    for (std::size_t i = 0; i < left.tasks.size(); ++i) {
+        const auto& a = left.tasks[i];
+        const auto& b = right.tasks[i];
+        if (a.title != b.title || a.workspace != b.workspace || a.status != b.status || a.activity != b.activity) {
+            return false;
+        }
+    }
+
+    // uptimeSeconds and per-task durationSeconds advance with wall time. Keeping the latest values in memory
+    // but excluding them from repaint equivalence prevents a fixed 2-second paint loop.
+    return true;
+}
+
 }  // namespace aicontrol::ui
