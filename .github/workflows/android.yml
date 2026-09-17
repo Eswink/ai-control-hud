@@ -120,13 +120,23 @@ jobs:
         run: |
           set -euo pipefail
           apk='android/app/build/outputs/apk/release/app-release.apk'
+          build_tools="${ANDROID_HOME}/build-tools/35.0.0"
           test -f "$apk"
-          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk"
-          badging="$("${ANDROID_HOME}/build-tools/35.0.0/aapt" dump badging "$apk" | head -n 1)"
+          "${build_tools}/apksigner" verify --verbose --print-certs "$apk"
+          badging="$("${build_tools}/aapt" dump badging "$apk" | head -n 1)"
           grep -F "versionCode='${EXPECTED_VERSION_CODE}'" <<<"$badging"
           grep -F "versionName='${EXPECTED_VERSION_NAME}'" <<<"$badging"
-          unzip -Z1 "$apk" | grep -Fx 'res/layout/activity_main.xml'
-          unzip -Z1 "$apk" | grep -Fx 'res/layout-land/activity_main.xml'
+
+          # AAPT2 compiles/optimizes XML resources, so APK ZIP member paths are
+          # not a stable representation of source resource directories. Verify
+          # the packaged resource table instead: activity_main must exist and a
+          # landscape configuration must be present. The static UI gate above
+          # separately requires both default and layout-land/activity_main.xml.
+          "${build_tools}/aapt2" dump resources "$apk" > /tmp/hud-apk-resources.txt
+          grep -F 'activity_main' /tmp/hud-apk-resources.txt
+          "${build_tools}/aapt2" dump configurations "$apk" > /tmp/hud-apk-configurations.txt
+          grep -E '^land($|-)' /tmp/hud-apk-configurations.txt
+
           python3 scripts/ci-android-apk-secret-scan.py "$apk"
 
       - name: Remove ephemeral CI release key
