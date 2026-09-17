@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="status_connecting">连接中</string>
+    <string name="placeholder_dash">--</string>
+    <string name="five_hour_unavailable">5H --</string>
+    <string name="weekly_unavailable">WEEK --</string>
+</resources>
