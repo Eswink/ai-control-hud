@@ -12,11 +12,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Eswink/ai-control-hud/agent/internal/machineconfig"
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/winservice"
 )
 
 func serviceUpgrade(args []string) error {
 	flags := flag.NewFlagSet("service upgrade", flag.ContinueOnError)
+	defaultConfig, err := machineconfig.DefaultPath()
+	if err != nil {
+		return err
+	}
+	configPath := flags.String("config", defaultConfig, "machine configuration path")
 	sourceFlag := flags.String("source", "", "replacement Agent executable; defaults to the current CLI executable")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -51,6 +57,18 @@ func serviceUpgrade(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Binary-only upgrades intentionally preserve agent.json. Refresh source
+	// ACLs separately before any service downtime so an existing installation
+	// gains read access to newly consumed ZCode sources such as cli/log.
+	config, err := machineconfig.Load(absolute(*configPath))
+	if err != nil {
+		return fmt.Errorf("load machine config before upgrade: %w", err)
+	}
+	if err := machineconfig.PrepareSourceAccess(config); err != nil {
+		return err
+	}
+
 	staged, err := stageUpgradeExecutable(source, target)
 	if err != nil {
 		return err
@@ -109,7 +127,7 @@ func serviceUpgrade(args []string) error {
 		state = "running"
 	}
 	fmt.Printf("[service] upgraded=true executable=%s version=%s state=%s\n", target, candidateVersion, state)
-	fmt.Println("[service] machine config, CommandCode SecretStore, Hub SecretStore, firewall rule, and SCM registration were preserved")
+	fmt.Println("[service] machine config, CommandCode SecretStore, Hub SecretStore, firewall rule, and SCM registration were preserved; ZCode source read access was refreshed")
 	return nil
 }
 

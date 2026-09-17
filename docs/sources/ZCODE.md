@@ -1,15 +1,16 @@
 # ZCode source evidence
 
-Status: Goal mode was verified on the target Windows machine through live API comparison with the ZCode Desktop Goal UI (2026-09-15). Ordinary-session activity is additionally guarded by schema/unit regression tests and must be revalidated against the target machine whenever the local ZCode runtime schema changes.
+Status: Goal mode was verified on the target Windows machine through live API comparison with the ZCode Desktop Goal UI (2026-09-15). Pause/resume and ordinary-session rules are additionally covered by regression tests and should be revalidated against the target machine whenever ZCode changes its local runtime/log schema.
 
 ## Verified local sources
 
-The target machine exposes two useful SQLite databases:
+The target machine exposes three useful read-only source families:
 
-- `~/.zcode/cli/db/db.sqlite` — primary read-only runtime source for live Goal/session state;
-- `~/.zcode/v2/tasks-index.sqlite` — best-effort historical/task-index fallback.
+- `~/.zcode/cli/db/db.sqlite` — primary runtime source for Goal/session metadata and request activity;
+- `~/.zcode/cli/log/zcode-*.jsonl` — real-time turn lifecycle evidence;
+- `~/.zcode/v2/tasks-index.sqlite` — recent task/history projection.
 
-The production HUD does not depend on invoking a ZCode CLI binary.
+The production HUD does not invoke a ZCode CLI binary and does not write any of these sources.
 
 ## Primary live source: runtime DB
 
@@ -46,7 +47,7 @@ Verified tables/columns used for Goal mode:
 
 ### `model_usage`
 
-The runtime DB also records request/session activity in `model_usage`. The live ordinary-session fallback uses only:
+The runtime DB also records request/session activity in `model_usage`. The conservative DB-only ordinary-session fallback uses only:
 
 - `session_id`
 - `status`
@@ -56,34 +57,53 @@ Provider/model diagnostics may additionally inspect `provider_id` and `model_id`
 
 ## Live-state rules
 
+### Goal mode
+
 A Goal is considered live only when its `active_run_last_seen_at` heartbeat is fresh. The default freshness window is 120 seconds and can be adjusted with `HUD_ZCODE_GOAL_HEARTBEAT_SECONDS`.
 
-Historical sessions are not allowed to become `running` merely because an old `session_target.status` or `todo.status` still contains a running-like value. This rule was added after target-machine validation showed old sessions from several days earlier retaining stale running markers.
+A fresh Goal target whose normalized target status is `running`/`active` remains canonical `running` even if the current todo projection is still `pending`/`waiting`. This matters after pause/resume: the Goal runner and heartbeat can already be active again while the todo row has not yet advanced. A running todo also implies `running`; waiting is used only when there is no stronger running signal.
 
-### Ordinary-session live fallback
+Historical sessions are not allowed to become `running` merely because an old `session_target.status` or `todo.status` still contains a running-like value. Without a fresh Goal heartbeat, only recent terminal Goal state can remain visible.
 
-When no fresh Goal task is available, the collector checks the newest `model_usage` row for each ZCode runtime session and joins it to the sanitized `session` title/workspace metadata.
+### Turn lifecycle log
 
-An ordinary session is surfaced as a live task only when all of the following are true:
+For ordinary non-Goal work, the collector supplements the runtime DB with the newest bounded ZCode JSONL log tails. It reads at most the newest two `zcode-*.jsonl` files and at most 512 KiB from each file.
 
-1. the newest request row for that session has an explicit running/waiting-like status;
+The canonical lifecycle is:
+
+```text
+turn.started
+    -> model/tool/session activity
+    -> turn.completed | turn.failed | turn.cancelled
+```
+
+A fresh unmatched `turn.started` is authoritative evidence that the session is still running. Events for the same open turn refresh its activity timestamp. A terminal event closes the turn and prevents an older `model_usage=running` row from resurrecting it. A later `turn.started` reopens the same session after pause/cancel/resume.
+
+The default open-turn freshness window is 30 minutes and can be adjusted with `HUD_ZCODE_TURN_FRESH_SECONDS` (bounded to four hours). The log directory normally derives from the configured runtime DB (`.../cli/db/db.sqlite` -> `.../cli/log`) and can be overridden with `HUD_ZCODE_LOG_DIR` for interactive/non-service use.
+
+The JSONL reader consumes only event/session/timestamp metadata. Prompt/message bodies, tool payloads, credentials and headers are not exported.
+
+### Ordinary-session DB fallback
+
+If no usable live turn-log state is available, the collector checks the newest `model_usage` row for each runtime session and joins it to sanitized `session` title/workspace metadata.
+
+A DB-only ordinary session is surfaced only when:
+
+1. the newest request row has an explicit running/waiting-like status;
 2. `started_at` is fresh (10 minutes by default; a larger configured Goal heartbeat may extend this up to one hour);
-3. the session row exists and passes the expected schema checks.
+3. the session row exists and passes schema checks;
+4. no newer terminal turn-log state closes that request.
 
-The newest row wins before status filtering. Therefore a newer `completed`/`failed` request suppresses an older stale `running` row instead of resurrecting it. Source health alone is never converted into a synthetic running task, and a recent completed request is not treated as active.
+The newest request row wins before status filtering, so a newer completed/failed request suppresses an older DB running row. Source health alone is never converted into a synthetic running task.
 
 The emitted ordinary-session task keeps only canonical, privacy-preserving fields:
 
 - `id`: SHA-256-derived opaque ID; raw ZCode session IDs are not exported;
-- `title`: `session.title`, with a generic fallback only when the title is empty;
+- `title`: `session.title`, with a generic fallback only when empty;
 - `workspace`: basename of `session.path` / `session.directory`, never the full path;
-- `status`: canonical `running`/`waiting` mapping from the explicit latest request status;
-- `startedAt` / `updatedAt`: the latest request `started_at`;
-- `durationSeconds`: elapsed time from that request start.
-
-No prompt/message content or provider credentials are exposed by this path.
-
-If neither a fresh Goal nor a trustworthy ordinary runtime session exists, the composite adapter falls back to `~/.zcode/v2/tasks-index.sqlite` for best-effort task/history state.
+- `status`: canonical `running`/`waiting`;
+- `startedAt` / `updatedAt`: turn timestamps when available, otherwise latest request start;
+- `durationSeconds`: elapsed time from the selected start.
 
 ## Canonical Goal mapping
 
@@ -101,15 +121,9 @@ If neither a fresh Goal nor a trustworthy ordinary runtime session exists, the c
 
 Timestamp conversion accepts Unix seconds/milliseconds/microseconds by magnitude because ZCode stores integer timestamps across local tables.
 
-## Target-machine validation
+## Recent task/history merge
 
-The live HUD API was compared with the running ZCode Desktop Goal panel. It correctly resolved the current Goal title, workspace, current cycle/todo activity and a single `running` Goal. Older sessions that still contained running-like database values were filtered once heartbeat freshness was enforced.
-
-Ordinary-session runtime detection is intentionally more conservative than Goal detection because there is no Goal heartbeat. It relies on the latest explicit request status plus freshness and is covered by regression tests for active, terminal-superseding, and stale rows.
-
-## Historical fallback: task index
-
-`~/.zcode/v2/tasks-index.sqlite`, table `tasks`, remains available as a fallback for history and for installations where the ordinary runtime signal is unavailable.
+`~/.zcode/v2/tasks-index.sqlite`, table `tasks`, remains the best source for the recent task list and completed/failed history, but it is not authoritative for live status because its projection can lag.
 
 Verified fields include:
 
@@ -123,20 +137,38 @@ Verified fields include:
 - `archived`
 - `deleted`
 
-The adapter opens this database with SQLite URI `mode=ro`, verifies schema before querying, filters archived/deleted rows and hashes raw IDs before returning them through the canonical state API.
+When a trustworthy live Goal or ordinary runtime task exists, the collector now merges recent task-index history instead of returning only the live source. Before the merge it excludes rows whose raw `task_id` matches the live runtime session ID, so a stale task-index status cannot duplicate or override the live task. Raw IDs remain internal; emitted task-index IDs are hashed.
 
-The task index is explicitly not treated as authoritative live-running evidence because it can lag active runtime state.
+The resulting `zcode.summary` therefore contains the live running/waiting count plus recent completed/failed task-index counts. Display rows remain bounded by `HUD_ZCODE_TASK_LIMIT`; summary counting is not limited to the displayed row count.
+
+If no trustworthy live/runtime task exists, the task index remains the best-effort fallback state.
+
+## Corroborating public implementations/protocol evidence
+
+The pause/resume and ordinary-turn rules were cross-checked against public ZCode integrations rather than inferred from source health:
+
+- [`Oct1AtJoe/zcode-desktop`](https://github.com/Oct1AtJoe/zcode-desktop) reads the ZCode task index and JSONL log, and explicitly uses live `turn.started`/terminal state to override lagging task projection state;
+- [`william0wang/zcode-acp`](https://github.com/william0wang/zcode-acp) documents the turn lifecycle ending in `turn.completed`, `turn.failed` or `turn.cancelled` and notes projection/status staleness;
+- [`open-ace/open-ace#1075`](https://github.com/open-ace/open-ace/issues/1075) documents the same turn lifecycle/state event family.
+
+These are corroborating public implementations/protocol observations, not an assumption that third-party code is authoritative for every ZCode release.
+
+## Target-machine validation
+
+The live HUD API was previously compared with the running ZCode Desktop Goal panel and correctly resolved Goal title, workspace, current cycle/todo activity and fresh-heartbeat liveness. A later target-machine report exposed two additional real-world cases now covered by the collector rules above: a paused/resumed active Goal whose todo projection remained pending, and recent completed task-index history being hidden while a Goal was live.
 
 ## Provider/model evidence
 
-`model_usage` records `session_id`, `provider_id`, `model_id`, request status/timing and token counts. The sanitized discovery tool can correlate the freshest active Goal session to its actual provider/model without exporting the session ID, prompts, messages or credentials.
+`model_usage` records `session_id`, `provider_id`, `model_id`, request status/timing and token counts. The sanitized discovery tool can correlate runtime provider/model evidence without exporting session IDs, prompts, messages or credentials.
 
 ## Failure behavior
 
 - unsupported Goal schema -> try ordinary runtime-session detection, then task-index fallback;
-- unsupported `model_usage`/session runtime schema -> skip ordinary runtime detection and use task-index fallback;
+- JSONL log absent/unreadable -> continue with conservative DB-only ordinary-session detection;
+- unsupported `model_usage`/session runtime schema -> skip ordinary DB detection and use task-index fallback;
 - runtime SQLite read error -> sanitized source error / last-known-good becomes `stale`;
-- missing task-index schema -> explicit unsupported-schema error;
+- history/task-index read failure while trustworthy live state exists -> retain live state rather than erasing it;
+- missing task-index schema with no live state -> explicit unsupported-schema error;
 - no trustworthy live signal -> historical task-index state rather than fabricated running activity.
 
-All reads are read-only. The adapter does not modify ZCode state or emit provider credentials to the canonical API, Windows UI, or Android.
+All reads are read-only. The adapter does not modify ZCode state or emit provider credentials, raw session IDs, prompts/messages, or full filesystem paths to the canonical API, Windows UI, or Android.

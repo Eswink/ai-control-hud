@@ -88,14 +88,30 @@ func Load(path string) (Config, error) {
 	return config, nil
 }
 
-func Save(path string, config Config) error {
+// PrepareSourceAccess refreshes the minimum service read/traverse ACLs for all
+// configured ZCode sources. It is intentionally separate from Save so a
+// binary-only service upgrade can make newly consumed sources (such as the
+// turn-lifecycle log directory) readable without rewriting agent.json.
+func PrepareSourceAccess(config Config) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
-	if sourceaccess.Supported() {
-		if err := sourceaccess.EnsureServiceReadable(config.ZCodeRuntimeDB, config.ZCodeTaskIndexDB); err != nil {
-			return fmt.Errorf("prepare ZCode service access: %w", err)
-		}
+	if !sourceaccess.Supported() {
+		return nil
+	}
+	if err := sourceaccess.EnsureServiceReadable(
+		config.ZCodeRuntimeDB,
+		config.ZCodeTaskIndexDB,
+		zcodeLogDir(config.ZCodeRuntimeDB),
+	); err != nil {
+		return fmt.Errorf("prepare ZCode service access: %w", err)
+	}
+	return nil
+}
+
+func Save(path string, config Config) error {
+	if err := PrepareSourceAccess(config); err != nil {
+		return err
 	}
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
@@ -194,4 +210,20 @@ func cleanAbsolute(value string) string {
 		return filepath.Clean(value)
 	}
 	return filepath.Clean(absolute)
+}
+
+// zcodeLogDir mirrors the collector's runtime-db convention without extending
+// machine-config schema v1. Service install and binary upgrade grant
+// read/traverse access to this sibling directory when it already exists,
+// allowing LocalSystem to consume ZCode's bounded turn-lifecycle log tail.
+func zcodeLogDir(runtimeDB string) string {
+	runtimeDB = strings.TrimSpace(runtimeDB)
+	if runtimeDB == "" {
+		return ""
+	}
+	parent := filepath.Dir(filepath.Clean(runtimeDB))
+	if !strings.EqualFold(filepath.Base(parent), "db") {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(parent), "log")
 }

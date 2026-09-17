@@ -197,7 +197,7 @@ try {
 
     Write-Host "[g6-ci] upgrading while service is running"
     $protectedBeforeUpgrade = Get-ProtectedStateHashes
-    & $agent service upgrade --source $agent
+    & $agent service upgrade --config $machineConfig --source $agent
     if ($LASTEXITCODE -ne 0) {
         throw "running service upgrade failed with exit code $LASTEXITCODE"
     }
@@ -215,7 +215,7 @@ try {
 
     Write-Host "[g6-ci] forcing post-preflight SCM failure and verifying automatic rollback"
     $protectedBeforeRollback = Get-ProtectedStateHashes
-    & $agent service upgrade --source $badUpgradeAgent
+    & $agent service upgrade --config $machineConfig --source $badUpgradeAgent
     if ($LASTEXITCODE -eq 0) {
         throw "broken service candidate unexpectedly succeeded"
     }
@@ -253,7 +253,7 @@ try {
 
     Write-Host "[g6-ci] upgrading while service is stopped"
     $protectedBeforeStoppedUpgrade = Get-ProtectedStateHashes
-    & $agent service upgrade --source $agent
+    & $agent service upgrade --config $machineConfig --source $agent
     if ($LASTEXITCODE -ne 0) {
         throw "stopped service upgrade failed with exit code $LASTEXITCODE"
     }
