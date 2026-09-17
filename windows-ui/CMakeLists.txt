@@ -20,6 +20,7 @@ target_compile_definitions(ai-control-agent-ui PRIVATE
 target_include_directories(ai-control-agent-ui PRIVATE src)
 
 target_link_libraries(ai-control-agent-ui PRIVATE
+    comdlg32
     d2d1
     dwrite
     dwmapi
