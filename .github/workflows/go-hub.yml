@@ -16,14 +16,20 @@ on:
       - 'pyproject.toml'
       - 'scripts/ai-control-hub-systemd.sh'
       - 'scripts/ai-control-hub-lan-doctor.sh'
+      - 'scripts/ai-control-hub-upgrade.sh'
       - 'scripts/ci-go-only-hub.sh'
       - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/ci-hub-lan-doctor-smoke.sh'
+      - 'scripts/ci-hub-upgrade-smoke.sh'
+      - 'scripts/ci-hub-runtime-smoke.py'
+      - 'tools/tests/test_hub_runtime_smoke.py'
       - 'scripts/hub_bundle.py'
       - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
       - 'docs/H3_FIELD_VALIDATION.md'
       - 'docs/HUB_DEPLOYMENT.md'
       - 'docs/HUB_LAN_DOCTOR.md'
+      - 'docs/HUB_UPGRADE.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-hub.yml'
@@ -42,18 +48,28 @@ on:
       - 'pyproject.toml'
       - 'scripts/ai-control-hub-systemd.sh'
       - 'scripts/ai-control-hub-lan-doctor.sh'
+      - 'scripts/ai-control-hub-upgrade.sh'
       - 'scripts/ci-go-only-hub.sh'
       - 'scripts/ci-hub-deployment-smoke.sh'
+      - 'scripts/ci-hub-lan-doctor-smoke.sh'
+      - 'scripts/ci-hub-upgrade-smoke.sh'
+      - 'scripts/ci-hub-runtime-smoke.py'
+      - 'tools/tests/test_hub_runtime_smoke.py'
       - 'scripts/hub_bundle.py'
       - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
       - 'docs/H3_FIELD_VALIDATION.md'
       - 'docs/HUB_DEPLOYMENT.md'
       - 'docs/HUB_LAN_DOCTOR.md'
+      - 'docs/HUB_UPGRADE.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
       - '.github/workflows/go-hub.yml'
   workflow_dispatch:
+
+concurrency:
+  group: go-hub-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -68,6 +84,9 @@ jobs:
       - name: Enforce Go-only Hub boundary
         shell: bash
         run: bash ./scripts/ci-go-only-hub.sh
+
+      - name: Test Hub lifecycle gate negative controls
+        run: python3 -m unittest discover -s tools/tests -p test_hub_runtime_smoke.py -v
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -114,70 +133,7 @@ jobs:
           sha256sum dist/ai-control-hub > dist/ai-control-hub.sha256
 
       - name: Go Hub runtime smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          hub_pid=""
-          cleanup() {
-            if [[ -n "${hub_pid:-}" ]] && kill -0 "$hub_pid" 2>/dev/null; then
-              kill "$hub_pid" 2>/dev/null || true
-              wait "$hub_pid" 2>/dev/null || true
-            fi
-            rm -rf "$tmp"
-          }
-          trap cleanup EXIT
-
-          export HUD_HUB_DB="$tmp/hub.sqlite3"
-          export HUD_HUB_AGENT_ID=desktop-main
-          export HUD_HUB_AGENT_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-          export HUD_HUB_STALE_AFTER_SECONDS=45
-          export HUD_HUB_ID=ci-hub
-          export HUD_HUB_DISCOVERY_ENABLED=0
-          export HUD_HUB_DISCOVERY_PORT=8788
-          export HUD_HUB_HTTP_SCHEME=http
-          export HUD_HUB_HTTP_PORT=18787
-
-          dist/ai-control-hub serve --host 127.0.0.1 --port 18787 >"$tmp/hub.log" 2>&1 &
-          hub_pid=$!
-          ready=0
-          for _ in $(seq 1 50); do
-            if ! kill -0 "$hub_pid" 2>/dev/null; then
-              echo "Go Hub exited before readiness" >&2
-              cat "$tmp/hub.log" >&2
-              wait "$hub_pid" || true
-              exit 1
-            fi
-            if curl -fsS http://127.0.0.1:18787/api/v1/health >"$tmp/health.json"; then
-              ready=1
-              break
-            fi
-            sleep 0.2
-          done
-          if [[ "$ready" -ne 1 ]]; then
-            echo "Go Hub did not become ready" >&2
-            cat "$tmp/hub.log" >&2
-            exit 1
-          fi
-
-          python3 - "$tmp/health.json" <<'PY'
-          import json, sys
-          with open(sys.argv[1], encoding='utf-8') as f:
-              body = json.load(f)
-          assert body['schemaVersion'] == 1
-          assert body['status'] == 'ok'
-          assert body['sources']['zcode'] == 'error'
-          assert body['sources']['commandCode'] == 'error'
-          PY
-
-          kill "$hub_pid"
-          if ! wait "$hub_pid"; then
-            rc=$?
-            echo "Go Hub did not shut down cleanly (rc=$rc)" >&2
-            cat "$tmp/hub.log" >&2
-            exit "$rc"
-          fi
-          hub_pid=""
+        run: python3 scripts/ci-hub-runtime-smoke.py --hub dist/ai-control-hub
 
       - name: Validate Go Hub systemd assets
         shell: bash
