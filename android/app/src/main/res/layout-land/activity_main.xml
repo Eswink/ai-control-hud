@@ -1,0 +1,406 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/hud_background"
+    android:padding="@dimen/hud_screen_padding">
+
+    <LinearLayout
+        android:id="@+id/setupPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/hud_card_emphasis_background"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/setup_title"
+                android:textColor="@color/hud_text_primary"
+                android:textSize="@dimen/hud_text_28"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/hud_space_6"
+                android:text="@string/backend_server"
+                android:textColor="@color/hud_text_secondary"
+                android:textSize="@dimen/hud_text_14" />
+
+            <EditText
+                android:id="@+id/serverUrlInput"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/hud_touch_min"
+                android:layout_marginTop="@dimen/hud_space_16"
+                android:hint="@string/server_hint"
+                android:inputType="textUri"
+                android:singleLine="true"
+                android:textColor="@color/hud_text_primary"
+                android:textColorHint="@color/hud_text_muted" />
+
+            <Button
+                android:id="@+id/connectButton"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/hud_touch_min"
+                android:layout_marginTop="@dimen/hud_space_12"
+                android:backgroundTint="@color/hud_accent"
+                android:text="@string/action_connect"
+                android:textColor="@color/hud_button_text"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/setupStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/hud_space_8"
+                android:gravity="center"
+                android:textColor="@color/hud_error"
+                android:textSize="@dimen/hud_text_13" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/dashboardPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/app_name"
+                        android:textColor="@color/hud_text_primary"
+                        android:textSize="@dimen/hud_text_24"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hud_space_2"
+                        android:text="@string/focus_mode_subtitle"
+                        android:textColor="@color/hud_text_secondary"
+                        android:textSize="@dimen/hud_text_12" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/hud_card_gap"
+                    android:layout_weight="1.35"
+                    android:background="@drawable/hud_card_background"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <dev.eswink.aicontrolhud.ServerAddressView
+                        android:id="@+id/serverLabel"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="middle"
+                        android:maxLines="1"
+                        android:textColor="@color/hud_accent"
+                        android:textSize="@dimen/hud_text_13"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/liveStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/hud_space_10"
+                        android:text="@string/status_connecting"
+                        android:textColor="@color/hud_warning"
+                        android:textSize="@dimen/hud_text_12"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/changeServerButton"
+                        android:layout_width="@dimen/hud_touch_min"
+                        android:layout_height="@dimen/hud_touch_min"
+                        android:layout_marginStart="@dimen/hud_space_8"
+                        android:backgroundTint="@color/hud_surface_secondary"
+                        android:text="@string/action_server"
+                        android:textColor="@color/hud_text_secondary"
+                        android:textSize="@dimen/hud_text_11" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="@dimen/hud_card_gap"
+                android:layout_weight="1"
+                android:baselineAligned="false"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginEnd="@dimen/hud_space_6"
+                    android:layout_weight="1"
+                    android:background="@drawable/hud_card_emphasis_background"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/focus_command_remaining"
+                            android:textColor="@color/hud_text_primary"
+                            android:textSize="@dimen/hud_text_22"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/commandHealth"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/placeholder_dash"
+                            android:textColor="@color/hud_text_secondary"
+                            android:textSize="@dimen/hud_text_12"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/planText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hud_space_10"
+                        android:text="@string/plan_unavailable"
+                        android:textColor="@color/hud_accent"
+                        android:textSize="@dimen/hud_text_18"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/creditText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hud_space_16"
+                        android:ellipsize="end"
+                        android:maxLines="2"
+                        android:text="@string/credit_unavailable"
+                        android:textColor="@color/hud_teal"
+                        android:textSize="@dimen/hud_text_32"
+                        android:textStyle="bold" />
+
+                    <Space
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1" />
+
+                    <TextView
+                        android:id="@+id/fiveHourLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/five_hour_unavailable"
+                        android:textColor="@color/hud_text_secondary"
+                        android:textSize="@dimen/hud_text_13" />
+
+                    <ProgressBar
+                        android:id="@+id/fiveHourProgress"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="@dimen/hud_progress_height"
+                        android:layout_marginTop="@dimen/hud_space_6"
+                        android:max="100"
+                        android:progress="0"
+                        android:progressBackgroundTint="@color/hud_progress_muted"
+                        android:progressTint="@color/hud_accent" />
+
+                    <TextView
+                        android:id="@+id/weeklyLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hud_space_10"
+                        android:text="@string/weekly_unavailable"
+                        android:textColor="@color/hud_text_muted"
+                        android:textSize="@dimen/hud_text_12" />
+
+                    <ProgressBar
+                        android:id="@+id/weeklyProgress"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent"
+                        android:layout_height="@dimen/hud_progress_height"
+                        android:layout_marginTop="@dimen/hud_space_4"
+                        android:max="100"
+                        android:progress="0"
+                        android:progressBackgroundTint="@color/hud_progress_muted"
+                        android:progressTint="@color/hud_accent" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="@dimen/hud_space_6"
+                    android:layout_weight="1"
+                    android:background="@drawable/hud_card_background"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/focus_current_task"
+                            android:textColor="@color/hud_text_primary"
+                            android:textSize="@dimen/hud_text_22"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/zcodeHealth"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/placeholder_dash"
+                            android:textColor="@color/hud_text_secondary"
+                            android:textSize="@dimen/hud_text_12"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/zcodeSummary"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hud_space_8"
+                        android:text="@string/placeholder_dash"
+                        android:textColor="@color/hud_teal"
+                        android:textSize="@dimen/hud_text_14"
+                        android:textStyle="bold" />
+
+                    <FrameLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_marginTop="@dimen/hud_space_8"
+                        android:layout_weight="1"
+                        android:clipChildren="true">
+
+                        <LinearLayout
+                            android:id="@+id/taskList"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+
+                        <TextView
+                            android:id="@+id/taskEmpty"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center_vertical"
+                            android:text="@string/task_data_unavailable"
+                            android:textColor="@color/hud_text_secondary"
+                            android:textSize="@dimen/hud_text_16" />
+                    </FrameLayout>
+
+                    <TextView
+                        android:id="@+id/taskOverflow"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/lastUpdateText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hud_space_8"
+                        android:gravity="end"
+                        android:text="@string/waiting_first_snapshot"
+                        android:textColor="@color/hud_text_muted"
+                        android:textSize="@dimen/hud_text_12" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/hud_card_gap"
+                android:background="@drawable/hud_card_background"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/focus_tts_status"
+                    android:textColor="@color/hud_text_primary"
+                    android:textSize="@dimen/hud_text_14"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/voiceStatusText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/hud_space_12"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/tts_starting"
+                    android:textColor="@color/hud_success"
+                    android:textSize="@dimen/hud_text_12" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:visibility="gone">
+
+                    <Switch
+                        android:id="@+id/completedVoiceSwitch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/voice_completed_tasks" />
+
+                    <Switch
+                        android:id="@+id/failedVoiceSwitch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/voice_failed_tasks" />
+
+                    <Switch
+                        android:id="@+id/quietHoursSwitch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/voice_quiet_hours" />
+
+                    <Button
+                        android:id="@+id/testVoiceButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/action_test_voice" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>
