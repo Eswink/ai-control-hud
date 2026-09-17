@@ -11,6 +11,8 @@ enum class TextId {
     Sources,
     Diagnostics,
     Settings,
+    MiniHud,
+    FullDashboard,
     AgentStatus,
     WindowsService,
     HubOutbox,
