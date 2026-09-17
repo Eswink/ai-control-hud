@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+UPGRADE_HELPER="$SCRIPT_DIR/ai-control-agent-unix-upgrade.sh"
 LABEL="com.aicontrolhud.agent"
 INSTALL_DIR="/usr/local/lib/ai-control-hud"
 CONFIG_PATH="/Library/Application Support/AI Control HUD/agent.json"
@@ -16,6 +18,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ai-control-agent-launchd.sh install --agent PATH [--provider-config PATH] [--runtime-db PATH] [--task-index-db PATH] [--listen HOST:PORT] [--config PATH]
+  ai-control-agent-launchd.sh upgrade --agent PATH
   ai-control-agent-launchd.sh start|stop|restart|status
   ai-control-agent-launchd.sh remove [--purge] [--config PATH]
 EOF
@@ -144,6 +147,12 @@ case "$ACTION" in
     sudo install -m 0644 "$plist_tmp" "$PLIST_PATH"
     sudo plutil -lint "$PLIST_PATH"
     echo "[launchd] installed label=$LABEL config=$CONFIG_PATH"
+    ;;
+  upgrade)
+    require_launchd
+    [[ -n "$AGENT" && -f "$AGENT" ]] || { echo "--agent must point to the replacement agent binary" >&2; exit 2; }
+    [[ -f "$UPGRADE_HELPER" ]] || { echo "Unix upgrade helper is missing next to adapter: $UPGRADE_HELPER" >&2; exit 1; }
+    bash "$UPGRADE_HELPER" --manager launchd --agent "$AGENT"
     ;;
   start)
     require_launchd
