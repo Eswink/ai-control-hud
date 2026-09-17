@@ -29,6 +29,7 @@ on:
       - 'docs/HUB_DEPLOYMENT.md'
       - 'docs/HUB_LAN_DOCTOR.md'
       - 'docs/HUB_UPGRADE.md'
+      - 'docs/HUB_V2_PLAN.md'
       - 'docs/GO_RELEASE.md'
       - 'docs/GO_RELEASE_MANIFEST.md'
       - '.github/workflows/go-release.yml'
