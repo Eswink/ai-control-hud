@@ -57,6 +57,11 @@ enum class TextId {
     OpenDashboard,
     Exit,
     LocalApiUnavailable,
+
+    StartService = ServiceStartAction,
+    StopService = ServiceStopAction,
+    RestartService = ServiceRestartAction,
+    UpgradeService = ServiceUpgradeAction,
 };
 
 class Localization final {
