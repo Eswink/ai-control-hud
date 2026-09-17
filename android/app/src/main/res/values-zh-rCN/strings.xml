@@ -5,7 +5,15 @@
     <string name="backend_server">服务端地址</string>
     <string name="server_hint">auto.lan 或 192.168.101.103:8787</string>
     <string name="action_connect">连接</string>
-    <string name="dashboard_title">AI CONTROL</string>
+    <string name="dashboard_title">AI Control HUD</string>
+    <string name="dashboard_subtitle">Agent 监控 · 本机端</string>
+    <string name="connection_card_title">连接状态</string>
+    <string name="zcode_card_title">ZCode 任务状态</string>
+    <string name="zcode_card_subtitle">当前工作与任务健康状态</string>
+    <string name="task_list_title">任务详情</string>
+    <string name="command_card_title">CommandCode</string>
+    <string name="command_card_subtitle">套餐、额度与使用窗口</string>
+    <string name="voice_card_subtitle">本机 TTS 通知策略</string>
     <string name="section_zcode">ZCODE</string>
     <string name="section_command_code">COMMAND CODE</string>
     <string name="section_voice_alerts">TTS 语音提醒</string>
