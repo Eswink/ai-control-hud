@@ -109,7 +109,6 @@ case "$ACTION" in
 
     sudo install -d -m 0755 "$INSTALL_DIR"
     sudo install -m 0755 "$agent_abs" "$INSTALL_DIR/ai-control-agent"
-    sudo install -d -m 0755 "$(dirname "$AGENT_DATA_DIR")"
     sudo install -d -o root -g root -m 0700 "$AGENT_DATA_DIR"
 
     configure=(sudo "$INSTALL_DIR/ai-control-agent" configure --config "$config_abs")
