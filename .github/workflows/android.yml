@@ -112,7 +112,7 @@ jobs:
           HUD_ANDROID_VERSION_CODE: '900001'
         run: gradle --no-daemon :app:assembleRelease
 
-      - name: Verify signed release, version metadata, and secret scan
+      - name: Verify signed release, portrait and landscape resources, version metadata, and secret scan
         shell: bash
         env:
           EXPECTED_VERSION_NAME: 0.0.0-ci
@@ -125,6 +125,8 @@ jobs:
           badging="$("${ANDROID_HOME}/build-tools/35.0.0/aapt" dump badging "$apk" | head -n 1)"
           grep -F "versionCode='${EXPECTED_VERSION_CODE}'" <<<"$badging"
           grep -F "versionName='${EXPECTED_VERSION_NAME}'" <<<"$badging"
+          unzip -Z1 "$apk" | grep -Fx 'res/layout/activity_main.xml'
+          unzip -Z1 "$apk" | grep -Fx 'res/layout-land/activity_main.xml'
           python3 scripts/ci-android-apk-secret-scan.py "$apk"
 
       - name: Remove ephemeral CI release key
@@ -138,3 +140,12 @@ jobs:
           name: ai-control-hud-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload signed CI release APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-control-hud-android-ci-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
