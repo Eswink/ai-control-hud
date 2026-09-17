@@ -53,16 +53,17 @@ public final class EventPageTest {
     }
 
     @Test
-    public void retentionFloorSignalsIncompleteSavedHistory() throws Exception {
+    public void retentionFloorSignalsIncompleteSavedHistoryAndRebase() throws Exception {
         EventPage page = new EventPage(
                 EventPage.SUPPORTED_SCHEMA,
                 Collections.emptyList(),
-                1000L,
+                900L,
                 1500L,
                 1001L
-        );
+        ).validateForRequest(900L);
 
         assertTrue(page.cursorPredatesRetention(900L));
+        assertTrue(page.requiresRebase(900L));
         assertFalse(page.cursorPredatesRetention(1000L));
         assertFalse(page.cursorPredatesRetention(1200L));
     }
@@ -79,5 +80,6 @@ public final class EventPageTest {
         EventPage page = EventPage.parse(root).validateForRequest(900L);
         assertEquals(1001L, page.oldestSeq);
         assertTrue(page.cursorPredatesRetention(900L));
+        assertTrue(page.requiresRebase(900L));
     }
 }
