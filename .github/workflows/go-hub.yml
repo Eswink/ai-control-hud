@@ -23,6 +23,7 @@ on:
       - 'scripts/ci-hub-upgrade-smoke.sh'
       - 'scripts/ci-hub-runtime-smoke.py'
       - 'scripts/ci-hub-resource-smoke.py'
+      - 'scripts/ci-hub-stats-smoke.py'
       - 'tools/tests/test_hub_runtime_smoke.py'
       - 'tools/tests/test_hub_bundle.py'
       - 'scripts/hub_bundle.py'
@@ -33,6 +34,7 @@ on:
       - 'docs/HUB_LAN_DOCTOR.md'
       - 'docs/HUB_UPGRADE.md'
       - 'docs/HUB_RETENTION.md'
+      - 'docs/HUB_STORAGE.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
       - 'docs/RESOURCE_BUDGETS.md'
@@ -59,6 +61,7 @@ on:
       - 'scripts/ci-hub-upgrade-smoke.sh'
       - 'scripts/ci-hub-runtime-smoke.py'
       - 'scripts/ci-hub-resource-smoke.py'
+      - 'scripts/ci-hub-stats-smoke.py'
       - 'tools/tests/test_hub_runtime_smoke.py'
       - 'tools/tests/test_hub_bundle.py'
       - 'scripts/hub_bundle.py'
@@ -69,6 +72,7 @@ on:
       - 'docs/HUB_LAN_DOCTOR.md'
       - 'docs/HUB_UPGRADE.md'
       - 'docs/HUB_RETENTION.md'
+      - 'docs/HUB_STORAGE.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
       - 'docs/RESOURCE_BUDGETS.md'
@@ -145,6 +149,9 @@ jobs:
 
       - name: Go Hub resource growth smoke
         run: python3 scripts/ci-hub-resource-smoke.py --hub dist/ai-control-hub --requests 1000
+
+      - name: Go Hub stats CLI smoke
+        run: python3 scripts/ci-hub-stats-smoke.py --hub dist/ai-control-hub
 
       - name: Validate Go Hub systemd assets
         shell: bash
