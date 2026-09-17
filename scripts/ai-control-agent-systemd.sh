@@ -106,10 +106,16 @@ managed_service_name() {
 wait_service_active() {
   local name="$1"
   local attempts="${2:-40}"
+  local stable=0
   local i
   for ((i = 0; i < attempts; i++)); do
     if sudo systemctl is-active --quiet "$name"; then
-      return 0
+      stable=$((stable + 1))
+      if [[ "$stable" -ge 4 ]]; then
+        return 0
+      fi
+    else
+      stable=0
     fi
     sleep 0.25
   done
@@ -140,7 +146,7 @@ migrate_legacy_agent_unit() {
       return 1
     fi
     if ! sudo systemctl start "$SERVICE_NAME" || ! wait_service_active "$SERVICE_NAME"; then
-      echo "[systemd] new Agent service failed to become active; migration will roll back" >&2
+      echo "[systemd] new Agent service failed to become stably active; migration will roll back" >&2
       return 1
     fi
   fi
