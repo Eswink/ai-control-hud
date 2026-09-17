@@ -215,6 +215,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	// Read the retention floor before paging. If maintenance runs between these
+	// calls, this may conservatively report an older floor for one response, but
+	// it will never claim that an event returned in this page was already below
+	// the retained range.
+	oldest, _, _, err := s.store.EventBounds(r.Context(), s.config.PrimaryAgentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load event bounds failed")
+		return
+	}
 	items, latest, err := s.store.ListEvents(r.Context(), s.config.PrimaryAgentID, after, int(limit64))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load events failed")
@@ -229,6 +238,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		Events:        items,
 		NextAfter:     nextAfter,
 		LatestSeq:     latest,
+		OldestSeq:     oldest,
 	})
 }
 
