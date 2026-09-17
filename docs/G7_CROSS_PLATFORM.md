@@ -44,13 +44,24 @@ The key itself is never accepted as a command-line literal and is never printed 
 
 The older `--provider-config PATH` flow remains available only as an **explicit** compatibility/migration input. Machine/service configuration no longer probes `.local/commandcode-provider.json` or `HUD_ZCODE_CONFIG` implicitly.
 
-## Secret storage boundaries
+## Secret storage and durable outbox boundaries
 
 On Windows, the service path uses machine-scope DPAPI plus protected ACLs.
 
 On Linux/macOS the SecretStore is explicitly **permission-protected rather than encrypted at rest**: the state directory is forced to `0700`, the secret file to `0600`, and reads reject group/world-accessible state. For root service deployments, run `commandcode configure` with `sudo` so the protected record is root-owned.
 
 The machine config contains the SecretStore path, not the API key.
+
+When a protected Hub credential exists, the remote uploader also requires a writable durable SQLite event outbox. Service adapters set `AI_CONTROL_HUB_OUTBOX` explicitly instead of allowing the root service to fall back to a user-config directory that may be read-only under service hardening:
+
+```text
+Linux systemd: /var/lib/ai-control-hud/agent/events.sqlite3
+macOS launchd: <machine-config-directory>/events.sqlite3
+```
+
+The Linux adapter creates only the dedicated `agent` child directory as root `0700`; it does not loosen permissions on an existing `/var/lib/ai-control-hud` parent. Its hardened unit grants `ReadWritePaths` only to the Agent data child. The macOS LaunchDaemon injects the outbox path through `EnvironmentVariables` and uses the already protected machine-config directory.
+
+Normal service removal preserves the outbox for durable event delivery after reinstall. `remove --purge` deletes the outbox database and its `-wal`/`-shm` sidecars. Binary upgrades never rewrite or delete it.
 
 ## Linux systemd
 
@@ -82,11 +93,11 @@ bash ./ai-control-agent-systemd.sh stop
 bash ./ai-control-agent-systemd.sh remove
 ```
 
-`upgrade` is binary-only. The candidate must pass `ai-control-agent version` before service downtime. A running service is stopped, the new binary is atomically swapped in, and the service must remain stably active; startup failure restores the previous binary and restarts it. A stopped service remains stopped. Machine config, CommandCode SecretStore, Hub SecretStore, systemd unit, and configured source paths are not rewritten.
+`upgrade` is binary-only. The candidate must pass `ai-control-agent version` before service downtime. A running service is stopped, the new binary is atomically swapped in, and the service must remain stably active; startup failure restores the previous binary and restarts it. A stopped service remains stopped. Machine config, CommandCode SecretStore, Hub SecretStore, durable event outbox, systemd unit, and configured source paths are not rewritten.
 
 On first install the adapter resolves the invoking user's standard ZCode paths (`~/.zcode/cli/db/db.sqlite` and `~/.zcode/v2/tasks-index.sqlite`) **before** entering the root `sudo configure` context. Explicit `--runtime-db` / `--task-index-db` values take precedence. If no source can be found, installation fails instead of silently resolving `/root/.zcode`.
 
-The service runs as root from `/usr/local/lib/ai-control-hud/ai-control-agent`. The unit applies `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, read-only home access, and related hardening. `remove` preserves config/SecretStore for reversible reinstall; `remove --purge` removes the exact machine state and installed binary.
+The service runs as root from `/usr/local/lib/ai-control-hud/ai-control-agent`. The unit applies `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, read-only home access, and related hardening. `remove` preserves config/SecretStores/outbox for reversible reinstall; `remove --purge` removes the exact Agent machine state, outbox, and installed binary.
 
 ## macOS launchd
 
@@ -127,7 +138,7 @@ bash ./ai-control-agent-launchd.sh remove
 
 The launchd upgrade uses the same transactional file helper as Linux. Running state means the LaunchDaemon is loaded and reports `state = running`; an unloaded daemon is treated as inactive and remains unloaded after upgrade. A candidate that cannot stay running is booted out, the previous binary is restored, and the previous LaunchDaemon is bootstrapped again.
 
-The adapter resolves caller-home ZCode databases before `sudo`, installs a root LaunchDaemon plist at `/Library/LaunchDaemons/com.aicontrolhud.agent.plist`, and uses the same root-protected SecretStore model.
+The adapter resolves caller-home ZCode databases before `sudo`, installs a root LaunchDaemon plist at `/Library/LaunchDaemons/com.aicontrolhud.agent.plist`, and uses the same root-protected SecretStore model. The plist injects the durable outbox path next to the machine config.
 
 The plist is generated with macOS `plutil`, including a real `ProgramArguments` array so paths with spaces are represented as plist values rather than shell-concatenated command strings.
 
@@ -140,18 +151,19 @@ Native CI runs service + SecretStore smoke on Ubuntu and macOS arm64. Current va
 3. install the systemd/launchd service **without** `--provider-config`;
 4. verify SecretStore mode `0600`, ZCode path discovery, and `doctor`;
 5. delete the plaintext credential files;
-6. start/restart the service;
+6. start/restart the service with protected Hub configuration enabled and require the service-owned durable event outbox to be created;
 7. perform a running-state transactional upgrade and require healthy schema-v1 state afterward;
 8. upgrade to a fixture that passes `version` but cannot remain a service, require non-zero result, automatic binary rollback, previous service recovery, and healthy schema-v1 state;
 9. stop the service, perform an inactive upgrade, and require it to remain inactive/unloaded;
 10. require byte-identical machine config, CommandCode SecretStore, and Hub SecretStore across all upgrade/rollback operations;
-11. require no `.upgrade.new` or `.upgrade.bak` scratch files after success or successful rollback;
-12. remove while preserving machine config/SecretStores;
-13. reinstall with no provider file and no listen override;
-14. verify the previous custom listen value and protected credentials are preserved;
-15. start/stop again and final purge.
+11. require the durable outbox to survive upgrades, rollback, normal remove, and reinstall;
+12. require no `.upgrade.new` or `.upgrade.bak` scratch files after success or successful rollback;
+13. remove while preserving machine config/SecretStores/outbox;
+14. reinstall with no provider file and no listen override;
+15. verify the previous custom listen value and protected credentials are preserved;
+16. start/stop again, remove the independent Hub credential, and verify final service purge deletes the outbox database/WAL/SHM.
 
-This proves service reinstall and binary upgrade do not depend on recoverable plaintext credential files.
+This proves service reinstall and binary upgrade do not depend on recoverable plaintext credential files and that enabling the remote Hub uploader remains compatible with Unix service hardening.
 
 ## Reproducible release pipeline
 
@@ -193,7 +205,7 @@ The project distinguishes:
 
 - **cross-built** — binary compiled;
 - **native runtime validated** — native CI executed collector/API behavior;
-- **service validated** — native CI exercised service adapter + SecretStore lifecycle, including transactional upgrades on Linux/macOS arm64;
+- **service validated** — native CI exercised service adapter + SecretStore/outbox lifecycle, including transactional upgrades on Linux/macOS arm64;
 - **target-machine validated** — real deployment hardware completed the field gate.
 
 The current CI establishes the first three levels across the supported matrix, with native service lifecycle validation on Windows, Linux amd64, and macOS arm64. Real Windows + Android core deployment has separately passed the accepted field path documented in the Central Hub roadmap.
