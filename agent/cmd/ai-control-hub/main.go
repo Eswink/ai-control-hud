@@ -34,6 +34,8 @@ func run(args []string) error {
 			return nil
 		case "backup":
 			return runBackup(args[1:])
+		case "stats":
+			return runStats(args[1:])
 		case "serve":
 			args = args[1:]
 		}
@@ -176,4 +178,33 @@ func runBackup(args []string) error {
 	}
 	fmt.Printf("[hub] backup=%s source=%s integrity=ok\n", *output, *database)
 	return nil
+}
+
+func runStats(args []string) error {
+	flags := flag.NewFlagSet("stats", flag.ContinueOnError)
+	database := flags.String("database", "", "existing Hub SQLite database")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *database == "" {
+		return errors.New("stats requires --database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stats, err := hub.InspectDatabase(ctx, *database)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("[hub-stats] database=%s databaseBytes=%d walBytes=%d\n", *database, stats.DatabaseBytes, stats.WALBytes)
+	fmt.Printf("[hub-stats] events=%d oldestSeq=%d latestSeq=%d\n", stats.EventCount, stats.OldestSeq, stats.LatestSeq)
+	fmt.Printf("[hub-stats] pageSize=%d pages=%d freePages=%d reusableBytes=%d\n", stats.PageSize, stats.PageCount, stats.FreePageCount, stats.ReusableBytes())
+	fmt.Printf("[hub-stats] oldestReceivedAt=%s newestReceivedAt=%s\n", formatOptionalTime(stats.OldestReceivedAt), formatOptionalTime(stats.NewestReceivedAt))
+	return nil
+}
+
+func formatOptionalTime(value *time.Time) string {
+	if value == nil {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }

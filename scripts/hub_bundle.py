@@ -20,6 +20,7 @@ INCLUDE_FILES = (
     "docs/HUB_LAN_DOCTOR.md",
     "docs/HUB_UPGRADE.md",
     "docs/HUB_RETENTION.md",
+    "docs/HUB_STORAGE.md",
     "docs/H3_FIELD_VALIDATION.md",
     "docs/H3_WINDOWS_FIRST_INSTALL.md",
     "scripts/ai-control-hub-systemd.sh",

@@ -17,12 +17,13 @@ import (
 const maxRequestBody = 2 << 20
 
 type Server struct {
-	config    Config
-	store     *Store
-	version   string
-	now       func() time.Time
-	startedAt time.Time
-	handler   http.Handler
+	config     Config
+	store      *Store
+	version    string
+	now        func() time.Time
+	startedAt  time.Time
+	handler    http.Handler
+	stateCache primaryStateCache
 }
 
 func NewServer(config Config, store *Store, version string, now func() time.Time) (*Server, error) {
@@ -84,6 +85,9 @@ func (s *Server) handleAgentState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "persist state failed")
 		return
 	}
+	if envelope.AgentID == s.config.PrimaryAgentID {
+		s.stateCache.store(envelope.State, receivedAt)
+	}
 	writeJSON(w, http.StatusOK, AgentReceipt{Status: "accepted", AgentID: envelope.AgentID, ReceivedAt: receivedAt})
 }
 
@@ -110,6 +114,9 @@ func (s *Server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.RecordHeartbeat(r.Context(), heartbeat.AgentID, heartbeat.SentAt, receivedAt, heartbeat.AgentVersion); err != nil {
 		writeError(w, http.StatusInternalServerError, "persist heartbeat failed")
 		return
+	}
+	if heartbeat.AgentID == s.config.PrimaryAgentID {
+		s.stateCache.heartbeat(receivedAt)
 	}
 	writeJSON(w, http.StatusOK, AgentReceipt{Status: "accepted", AgentID: heartbeat.AgentID, ReceivedAt: receivedAt})
 }
@@ -153,7 +160,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, http.MethodGet)
 		return
 	}
-	state, lastSeen, found, err := s.store.LoadState(r.Context(), s.config.PrimaryAgentID)
+	state, lastSeen, found, err := s.loadPrimaryState(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load state failed")
 		return
@@ -171,7 +178,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.utcnow()
-	state, lastSeen, found, err := s.store.LoadState(r.Context(), s.config.PrimaryAgentID)
+	state, lastSeen, found, err := s.loadPrimaryState(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load health failed")
 		return
