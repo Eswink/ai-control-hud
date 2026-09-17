@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -14,14 +15,14 @@ const (
 )
 
 type OutboxStats struct {
-	PendingEvents       int
-	TaskBaselineRows    int
-	CompactedTaskRows   int
-	PageCount           int64
-	FreelistPages       int64
-	PageSizeBytes       int64
-	ReusableBytes       int64
-	OldestPendingAt     *time.Time
+	PendingEvents     int
+	TaskBaselineRows  int
+	CompactedTaskRows int
+	PageCount         int64
+	FreelistPages     int64
+	PageSizeBytes     int64
+	ReusableBytes     int64
+	OldestPendingAt   *time.Time
 }
 
 type OutboxMaintenanceResult struct {
@@ -122,7 +123,11 @@ func (o *Outbox) Maintain(ctx context.Context, now time.Time, compactAfter time.
 	}
 
 	maintenance := OutboxMaintenanceResult{CompactedRows: int(rows)}
-	if o.persistent {
+	var journalMode string
+	if err := o.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		return OutboxMaintenanceResult{}, fmt.Errorf("read event outbox journal mode: %w", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(journalMode), "wal") {
 		if err := o.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(
 			&maintenance.CheckpointBusy,
 			&maintenance.CheckpointLogPages,
