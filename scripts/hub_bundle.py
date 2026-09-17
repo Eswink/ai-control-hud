@@ -20,6 +20,7 @@ INCLUDE_FILES = (
     "docs/HUB_LAN_DOCTOR.md",
     "docs/HUB_UPGRADE.md",
     "docs/HUB_RETENTION.md",
+    "docs/HUB_STORAGE.md",
     "docs/H3_FIELD_VALIDATION.md",
     "docs/H3_WINDOWS_FIRST_INSTALL.md",
     "scripts/ai-control-hub-systemd.sh",
@@ -58,8 +59,10 @@ def build_info_text(version: str) -> str:
     )
 
 
-def write_build_info(destination: Path, version: str) -> None:
-    (destination / "BUILD_INFO.txt").write_text(build_info_text(version), encoding="utf-8")
+def write_build_info(destination: Path, version: str) -> str:
+    text = build_info_text(version)
+    (destination / "BUILD_INFO.txt").write_text(text, encoding="utf-8")
+    return text
 
 
 def write_checksums(destination: Path) -> None:
