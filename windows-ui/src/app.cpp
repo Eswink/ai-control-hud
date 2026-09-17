@@ -3,6 +3,7 @@
 #include "agent_client.h"
 #include "health_probe.h"
 #include "privileged_actions.h"
+#include "window_state.h"
 
 #include <dwmapi.h>
 #include <shellapi.h>
@@ -25,9 +26,28 @@ constexpr float kCardGap = 16.0f;
 constexpr float kNavTop = 132.0f;
 constexpr float kNavHeight = 40.0f;
 constexpr float kNavGap = 8.0f;
+constexpr int kMiniWidth = 600;
+constexpr int kMiniHeight = 238;
 
 D2D1_COLOR_F Rgb(UINT32 rgb, float alpha = 1.0f) noexcept {
     return D2D1::ColorF(rgb, alpha);
+}
+
+D2D1_COLOR_F SystemColor(int index) noexcept {
+    const COLORREF value = GetSysColor(index);
+    return D2D1::ColorF(
+        static_cast<float>(GetRValue(value)) / 255.0f,
+        static_cast<float>(GetGValue(value)) / 255.0f,
+        static_cast<float>(GetBValue(value)) / 255.0f,
+        1.0f
+    );
+}
+
+bool HighContrastEnabled() noexcept {
+    HIGHCONTRASTW highContrast{};
+    highContrast.cbSize = sizeof(highContrast);
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(highContrast), &highContrast, 0) != FALSE &&
+           (highContrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
 }
 
 std::wstring ToFixed(double value, int precision = 1) {
@@ -117,19 +137,35 @@ bool App::RegisterWindowClass() {
 }
 
 bool App::CreateMainWindow(int showCommand) {
+    const WindowState restored = LoadWindowState();
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    int width = 1120;
+    int height = 720;
+    if (restored.hasNormalRect && MonitorFromRect(&restored.normalRect, MONITOR_DEFAULTTONULL) != nullptr) {
+        normalRect_ = restored.normalRect;
+        hasNormalRect_ = true;
+        x = normalRect_.left;
+        y = normalRect_.top;
+        width = normalRect_.right - normalRect_.left;
+        height = normalRect_.bottom - normalRect_.top;
+    }
+
     const std::wstring title(localization_.Get(TextId::AppTitle));
     window_ = CreateWindowExW(0, kWindowClass, title.c_str(), WS_OVERLAPPEDWINDOW,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 1120, 720,
-                              nullptr, nullptr, instance_, this);
+                              x, y, width, height, nullptr, nullptr, instance_, this);
     if (window_ == nullptr) return false;
 
-    BOOL dark = TRUE;
-    constexpr DWORD kImmersiveDarkMode = 20;
-    (void)DwmSetWindowAttribute(window_, kImmersiveDarkMode, &dark, sizeof(dark));
+    if (!HighContrastEnabled()) {
+        BOOL dark = TRUE;
+        constexpr DWORD kImmersiveDarkMode = 20;
+        (void)DwmSetWindowAttribute(window_, kImmersiveDarkMode, &dark, sizeof(dark));
+    }
 
     ShowWindow(window_, showCommand == SW_HIDE ? SW_SHOWNORMAL : showCommand);
     UpdateWindow(window_);
     visible_.store(IsWindowVisible(window_) != FALSE, std::memory_order_relaxed);
+    if (restored.miniHud) ApplyMiniHud(true);
     return true;
 }
 
@@ -156,23 +192,42 @@ bool App::CreateDeviceIndependentResources() {
 bool App::EnsureRenderTarget() {
     if (renderTarget_) return true;
     if (window_ == nullptr) return false;
+
     RECT client{};
     GetClientRect(window_, &client);
-    const auto size = D2D1::SizeU(static_cast<UINT32>(std::max<LONG>(1, client.right - client.left)),
-                                  static_cast<UINT32>(std::max<LONG>(1, client.bottom - client.top)));
-    HRESULT hr = d2dFactory_->CreateHwndRenderTarget(D2D1::RenderTargetProperties(),
-                                                      D2D1::HwndRenderTargetProperties(window_, size),
-                                                      renderTarget_.GetAddressOf());
+    const auto size = D2D1::SizeU(
+        static_cast<UINT32>(std::max<LONG>(1, client.right - client.left)),
+        static_cast<UINT32>(std::max<LONG>(1, client.bottom - client.top))
+    );
+    const HRESULT hr = d2dFactory_->CreateHwndRenderTarget(
+        D2D1::RenderTargetProperties(),
+        D2D1::HwndRenderTargetProperties(window_, size),
+        renderTarget_.GetAddressOf()
+    );
     if (FAILED(hr)) return false;
-    const auto brush = [&](UINT32 rgb, auto& target) -> bool {
-        return SUCCEEDED(renderTarget_->CreateSolidColorBrush(Rgb(rgb), target.GetAddressOf()));
+
+    const bool highContrast = HighContrastEnabled();
+    const auto createBrush = [&](D2D1_COLOR_F color, auto& target) -> bool {
+        return SUCCEEDED(renderTarget_->CreateSolidColorBrush(color, target.GetAddressOf()));
     };
-    if (!brush(0x0B0F14, backgroundBrush_) || !brush(0x101720, sidebarBrush_) ||
-        !brush(0x151D27, surfaceBrush_) || !brush(0x182432, surfaceStrongBrush_) ||
-        !brush(0x293544, borderBrush_) || !brush(0xF2F7FB, primaryBrush_) ||
-        !brush(0x91A2B4, secondaryBrush_) || !brush(0x52B8FF, accentBrush_) ||
-        !brush(0x52D3A1, successBrush_) || !brush(0xF4C75D, warningBrush_) ||
-        !brush(0xFF6B78, errorBrush_)) {
+    const D2D1_COLOR_F background = highContrast ? SystemColor(COLOR_WINDOW) : Rgb(0x0B0F14);
+    const D2D1_COLOR_F surface = highContrast ? SystemColor(COLOR_WINDOW) : Rgb(0x151D27);
+    const D2D1_COLOR_F strong = highContrast ? SystemColor(COLOR_WINDOW) : Rgb(0x182432);
+    const D2D1_COLOR_F text = highContrast ? SystemColor(COLOR_WINDOWTEXT) : Rgb(0xF2F7FB);
+    const D2D1_COLOR_F secondary = highContrast ? SystemColor(COLOR_WINDOWTEXT) : Rgb(0x91A2B4);
+    const D2D1_COLOR_F accent = highContrast ? SystemColor(COLOR_HIGHLIGHT) : Rgb(0x52B8FF);
+
+    if (!createBrush(background, backgroundBrush_) ||
+        !createBrush(highContrast ? background : Rgb(0x101720), sidebarBrush_) ||
+        !createBrush(surface, surfaceBrush_) ||
+        !createBrush(strong, surfaceStrongBrush_) ||
+        !createBrush(highContrast ? text : Rgb(0x293544), borderBrush_) ||
+        !createBrush(text, primaryBrush_) ||
+        !createBrush(secondary, secondaryBrush_) ||
+        !createBrush(accent, accentBrush_) ||
+        !createBrush(highContrast ? text : Rgb(0x52D3A1), successBrush_) ||
+        !createBrush(highContrast ? text : Rgb(0xF4C75D), warningBrush_) ||
+        !createBrush(highContrast ? text : Rgb(0xFF6B78), errorBrush_)) {
         DiscardRenderTarget();
         return false;
     }
@@ -180,9 +235,18 @@ bool App::EnsureRenderTarget() {
 }
 
 void App::DiscardRenderTarget() {
-    backgroundBrush_.Reset(); sidebarBrush_.Reset(); surfaceBrush_.Reset(); surfaceStrongBrush_.Reset();
-    borderBrush_.Reset(); primaryBrush_.Reset(); secondaryBrush_.Reset(); accentBrush_.Reset();
-    successBrush_.Reset(); warningBrush_.Reset(); errorBrush_.Reset(); renderTarget_.Reset();
+    backgroundBrush_.Reset();
+    sidebarBrush_.Reset();
+    surfaceBrush_.Reset();
+    surfaceStrongBrush_.Reset();
+    borderBrush_.Reset();
+    primaryBrush_.Reset();
+    secondaryBrush_.Reset();
+    accentBrush_.Reset();
+    successBrush_.Reset();
+    warningBrush_.Reset();
+    errorBrush_.Reset();
+    renderTarget_.Reset();
 }
 
 void App::DrawCard(ID2D1RenderTarget* target, const D2D1_RECT_F& rect, ID2D1Brush* fill, float radius) {
@@ -210,13 +274,67 @@ void App::Draw() {
     const DashboardSnapshot snapshot = SnapshotCopy();
     const D2D1_SIZE_F size = renderTarget_->GetSize();
     renderTarget_->BeginDraw();
-    renderTarget_->Clear(Rgb(0x0B0F14));
+    renderTarget_->Clear(HighContrastEnabled() ? SystemColor(COLOR_WINDOW) : Rgb(0x0B0F14));
 
     const auto finish = [&]() {
         const HRESULT hr = renderTarget_->EndDraw();
         if (hr == D2DERR_RECREATE_TARGET) DiscardRenderTarget();
         EndPaint(window_, &paint);
     };
+
+    const std::wstring connection = ConnectionText(localization_, snapshot.connection);
+    ID2D1Brush* connectionBrush = secondaryBrush_.Get();
+    if (snapshot.connection == ConnectionState::Live) connectionBrush = successBrush_.Get();
+    else if (snapshot.connection == ConnectionState::Degraded || snapshot.connection == ConnectionState::Connecting) connectionBrush = warningBrush_.Get();
+    else connectionBrush = errorBrush_.Get();
+
+    if (miniHud_) {
+        const float left = 16.0f;
+        const float top = 14.0f;
+        const float right = std::max(left + 300.0f, size.width - 16.0f);
+        const float bottom = std::max(top + 150.0f, size.height - 14.0f);
+        DrawCard(renderTarget_.Get(), D2D1::RectF(left, top, right, bottom), surfaceStrongBrush_.Get(), 12.0f);
+        DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::MiniHud), sectionFormat_.Get(),
+                      D2D1::RectF(left + 16, top + 12, right - 150, top + 42), primaryBrush_.Get());
+        DrawTextBlock(renderTarget_.Get(), connection, bodyFormat_.Get(),
+                      D2D1::RectF(right - 140, top + 14, right - 16, top + 40), connectionBrush,
+                      DWRITE_TEXT_ALIGNMENT_TRAILING);
+
+        const float mid = left + (right - left) * 0.54f;
+        DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::CurrentTask), smallFormat_.Get(),
+                      D2D1::RectF(left + 16, top + 56, mid - 12, top + 78), secondaryBrush_.Get());
+        const TaskView* current = CurrentTask(snapshot);
+        if (current == nullptr) {
+            DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::NoCurrentTask), bodyFormat_.Get(),
+                          D2D1::RectF(left + 16, top + 84, mid - 12, bottom - 20), primaryBrush_.Get());
+        } else {
+            DrawTextBlock(renderTarget_.Get(), current->title, sectionFormat_.Get(),
+                          D2D1::RectF(left + 16, top + 82, mid - 12, top + 114), primaryBrush_.Get());
+            std::wstring meta = current->status;
+            if (!current->workspace.empty()) meta += L" · " + current->workspace;
+            DrawTextBlock(renderTarget_.Get(), meta, smallFormat_.Get(),
+                          D2D1::RectF(left + 16, top + 120, mid - 12, bottom - 18), accentBrush_.Get());
+        }
+
+        DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::CommandCode), smallFormat_.Get(),
+                      D2D1::RectF(mid + 10, top + 56, right - 16, top + 78), secondaryBrush_.Get());
+        const std::wstring plan = snapshot.plan.empty() ? L"—" : snapshot.plan;
+        DrawTextBlock(renderTarget_.Get(), plan, bodyFormat_.Get(),
+                      D2D1::RectF(mid + 10, top + 82, right - 16, top + 106), accentBrush_.Get());
+        std::wstring credit = L"—";
+        if (snapshot.creditRemaining) {
+            credit = ToFixed(*snapshot.creditRemaining, 2);
+            if (!snapshot.creditUnit.empty()) credit += L" " + snapshot.creditUnit;
+        }
+        DrawTextBlock(renderTarget_.Get(), credit, sectionFormat_.Get(),
+                      D2D1::RectF(mid + 10, top + 112, right - 16, top + 142), successBrush_.Get());
+        const std::wstring health = L"ZCode " + SourceText(localization_, snapshot.zcodeStatus) +
+                                    L" · CommandCode " + SourceText(localization_, snapshot.commandCodeStatus);
+        DrawTextBlock(renderTarget_.Get(), health, smallFormat_.Get(),
+                      D2D1::RectF(mid + 10, top + 148, right - 16, bottom - 16), secondaryBrush_.Get());
+        finish();
+        return;
+    }
 
     renderTarget_->FillRectangle(D2D1::RectF(0, 0, kSidebarWidth, size.height), sidebarBrush_.Get());
     DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::AppTitle), sectionFormat_.Get(),
@@ -230,14 +348,14 @@ void App::Draw() {
         {TextId::Diagnostics, Page::Diagnostics},
     };
     for (std::size_t i = 0; i < 3; ++i) {
-        const float top = kNavTop + static_cast<float>(i) * (kNavHeight + kNavGap);
+        const float navTop = kNavTop + static_cast<float>(i) * (kNavHeight + kNavGap);
         if (page_ == nav[i].page) {
             renderTarget_->FillRoundedRectangle(
-                D2D1::RoundedRect(D2D1::RectF(12, top, kSidebarWidth - 12, top + kNavHeight), 9, 9),
+                D2D1::RoundedRect(D2D1::RectF(12, navTop, kSidebarWidth - 12, navTop + kNavHeight), 9, 9),
                 surfaceStrongBrush_.Get());
         }
         DrawTextBlock(renderTarget_.Get(), localization_.Get(nav[i].text), bodyFormat_.Get(),
-                      D2D1::RectF(26, top + 9, kSidebarWidth - 20, top + 34),
+                      D2D1::RectF(26, navTop + 9, kSidebarWidth - 20, navTop + 34),
                       page_ == nav[i].page ? accentBrush_.Get() : primaryBrush_.Get());
     }
 
@@ -247,14 +365,8 @@ void App::Draw() {
                              page_ == Page::Sources ? TextId::Sources : TextId::Diagnostics;
     DrawTextBlock(renderTarget_.Get(), localization_.Get(pageTitle), titleFormat_.Get(),
                   D2D1::RectF(left, 22, right - 220, 66), primaryBrush_.Get());
-
-    const std::wstring connection = ConnectionText(localization_, snapshot.connection);
-    ID2D1Brush* connectionBrush = secondaryBrush_.Get();
-    if (snapshot.connection == ConnectionState::Live) connectionBrush = successBrush_.Get();
-    else if (snapshot.connection == ConnectionState::Degraded || snapshot.connection == ConnectionState::Connecting) connectionBrush = warningBrush_.Get();
-    else connectionBrush = errorBrush_.Get();
-    DrawTextBlock(renderTarget_.Get(), connection, sectionFormat_.Get(), D2D1::RectF(right - 210, 26, right, 58),
-                  connectionBrush, DWRITE_TEXT_ALIGNMENT_TRAILING);
+    DrawTextBlock(renderTarget_.Get(), connection, sectionFormat_.Get(),
+                  D2D1::RectF(right - 210, 26, right, 58), connectionBrush, DWRITE_TEXT_ALIGNMENT_TRAILING);
 
     if (page_ == Page::Sources) {
         const float top = 82.0f;
@@ -297,7 +409,8 @@ void App::Draw() {
         DrawTextBlock(renderTarget_.Get(), SourceText(localization_, snapshot.commandCodeStatus), bodyFormat_.Get(),
                       D2D1::RectF(cRect.left + 20, cRect.top + 54, cRect.right - 20, cRect.top + 82),
                       snapshot.commandCodeStatus == L"ok" ? successBrush_.Get() : warningBrush_.Get());
-        const std::wstring plan = std::wstring(localization_.Get(TextId::Plan)) + L": " + (snapshot.plan.empty() ? L"—" : snapshot.plan);
+        const std::wstring plan = std::wstring(localization_.Get(TextId::Plan)) + L": " +
+                                  (snapshot.plan.empty() ? L"—" : snapshot.plan);
         DrawTextBlock(renderTarget_.Get(), plan, bodyFormat_.Get(),
                       D2D1::RectF(cRect.left + 20, cRect.top + 94, cRect.right - 20, cRect.top + 122), accentBrush_.Get());
         DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::UsageWindows), smallFormat_.Get(),
@@ -310,15 +423,15 @@ void App::Draw() {
                           D2D1::RectF(cRect.left + 20, rowY, cRect.right - 20, rowY + 36), secondaryBrush_.Get());
         }
         for (std::size_t i = 0; i < windowCount; ++i) {
-            const auto& window = snapshot.usageWindows[i];
-            std::wstring value = window.usedPercent ? ToFixed(*window.usedPercent, 1) + L"%" : L"—";
-            DrawTextBlock(renderTarget_.Get(), window.name, bodyFormat_.Get(),
+            const auto& usage = snapshot.usageWindows[i];
+            const std::wstring value = usage.usedPercent ? ToFixed(*usage.usedPercent, 1) + L"%" : L"—";
+            DrawTextBlock(renderTarget_.Get(), usage.name, bodyFormat_.Get(),
                           D2D1::RectF(cRect.left + 20, rowY, cRect.right - 132, rowY + 24), primaryBrush_.Get());
             DrawTextBlock(renderTarget_.Get(), value, bodyFormat_.Get(),
                           D2D1::RectF(cRect.right - 126, rowY, cRect.right - 20, rowY + 24), accentBrush_.Get(),
                           DWRITE_TEXT_ALIGNMENT_TRAILING);
-            if (!window.resetAt.empty()) {
-                const std::wstring reset = std::wstring(localization_.Get(TextId::ResetAt)) + L": " + window.resetAt;
+            if (!usage.resetAt.empty()) {
+                const std::wstring reset = std::wstring(localization_.Get(TextId::ResetAt)) + L": " + usage.resetAt;
                 DrawTextBlock(renderTarget_.Get(), reset, smallFormat_.Get(),
                               D2D1::RectF(cRect.left + 20, rowY + 27, cRect.right - 20, rowY + 48), secondaryBrush_.Get());
             }
@@ -338,42 +451,54 @@ void App::Draw() {
 
         DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::AgentStatus), sectionFormat_.Get(),
                       D2D1::RectF(agentRect.left + 20, agentRect.top + 18, agentRect.right - 20, agentRect.top + 48), primaryBrush_.Get());
-        float y = agentRect.top + 66.0f;
+        float rowY = agentRect.top + 66.0f;
         const std::wstring service = std::wstring(localization_.Get(TextId::WindowsService)) + L": " + ServiceText(localization_, snapshot.service);
-        DrawTextBlock(renderTarget_.Get(), service, bodyFormat_.Get(), D2D1::RectF(agentRect.left + 20, y, agentRect.right - 20, y + 28), secondaryBrush_.Get());
-        y += 38.0f;
-        const std::wstring version = std::wstring(localization_.Get(TextId::AgentVersion)) + L": " + (snapshot.agentVersion.empty() ? L"—" : snapshot.agentVersion);
-        DrawTextBlock(renderTarget_.Get(), version, bodyFormat_.Get(), D2D1::RectF(agentRect.left + 20, y, agentRect.right - 20, y + 28), secondaryBrush_.Get());
-        y += 38.0f;
-        const std::wstring uptime = std::wstring(localization_.Get(TextId::Uptime)) + L": " + (snapshot.uptimeSeconds ? DurationText(*snapshot.uptimeSeconds) : L"—");
-        DrawTextBlock(renderTarget_.Get(), uptime, bodyFormat_.Get(), D2D1::RectF(agentRect.left + 20, y, agentRect.right - 20, y + 28), secondaryBrush_.Get());
-        y += 38.0f;
+        DrawTextBlock(renderTarget_.Get(), service, bodyFormat_.Get(),
+                      D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 28), secondaryBrush_.Get());
+        rowY += 38.0f;
+        const std::wstring version = std::wstring(localization_.Get(TextId::AgentVersion)) + L": " +
+                                     (snapshot.agentVersion.empty() ? L"—" : snapshot.agentVersion);
+        DrawTextBlock(renderTarget_.Get(), version, bodyFormat_.Get(),
+                      D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 28), secondaryBrush_.Get());
+        rowY += 38.0f;
+        const std::wstring uptime = std::wstring(localization_.Get(TextId::Uptime)) + L": " +
+                                    (snapshot.uptimeSeconds ? DurationText(*snapshot.uptimeSeconds) : L"—");
+        DrawTextBlock(renderTarget_.Get(), uptime, bodyFormat_.Get(),
+                      D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 28), secondaryBrush_.Get());
+        rowY += 38.0f;
         const std::wstring localApi = std::wstring(localization_.Get(TextId::LocalApi)) + L": 127.0.0.1:8787";
-        DrawTextBlock(renderTarget_.Get(), localApi, bodyFormat_.Get(), D2D1::RectF(agentRect.left + 20, y, agentRect.right - 20, y + 28), accentBrush_.Get());
-        y += 46.0f;
+        DrawTextBlock(renderTarget_.Get(), localApi, bodyFormat_.Get(),
+                      D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 28), accentBrush_.Get());
+        rowY += 46.0f;
         if (!snapshot.error.empty()) {
             DrawTextBlock(renderTarget_.Get(), snapshot.error, smallFormat_.Get(),
-                          D2D1::RectF(agentRect.left + 20, y, agentRect.right - 20, agentRect.bottom - 20), errorBrush_.Get());
+                          D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, agentRect.bottom - 20), errorBrush_.Get());
         }
 
         DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::HubOutbox), sectionFormat_.Get(),
                       D2D1::RectF(outboxRect.left + 20, outboxRect.top + 18, outboxRect.right - 20, outboxRect.top + 48), primaryBrush_.Get());
-        y = outboxRect.top + 66.0f;
+        rowY = outboxRect.top + 66.0f;
         if (!snapshot.outbox.available) {
             DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::NoData), bodyFormat_.Get(),
-                          D2D1::RectF(outboxRect.left + 20, y, outboxRect.right - 20, y + 36), secondaryBrush_.Get());
+                          D2D1::RectF(outboxRect.left + 20, rowY, outboxRect.right - 20, rowY + 36), secondaryBrush_.Get());
         } else {
-            const std::wstring pending = std::wstring(localization_.Get(TextId::OutboxPending)) + L": " + std::to_wstring(snapshot.outbox.pendingEvents);
-            DrawTextBlock(renderTarget_.Get(), pending, bodyFormat_.Get(), D2D1::RectF(outboxRect.left + 20, y, outboxRect.right - 20, y + 28), accentBrush_.Get());
-            y += 38.0f;
-            const std::wstring baselines = std::wstring(localization_.Get(TextId::OutboxBaselines)) + L": " + std::to_wstring(snapshot.outbox.taskBaselineRows);
-            DrawTextBlock(renderTarget_.Get(), baselines, bodyFormat_.Get(), D2D1::RectF(outboxRect.left + 20, y, outboxRect.right - 20, y + 28), secondaryBrush_.Get());
-            y += 38.0f;
-            const std::wstring compacted = std::wstring(localization_.Get(TextId::OutboxCompacted)) + L": " + std::to_wstring(snapshot.outbox.compactedTaskRows);
-            DrawTextBlock(renderTarget_.Get(), compacted, bodyFormat_.Get(), D2D1::RectF(outboxRect.left + 20, y, outboxRect.right - 20, y + 28), secondaryBrush_.Get());
-            y += 38.0f;
+            const std::wstring pending = std::wstring(localization_.Get(TextId::OutboxPending)) + L": " +
+                                         std::to_wstring(snapshot.outbox.pendingEvents);
+            DrawTextBlock(renderTarget_.Get(), pending, bodyFormat_.Get(),
+                          D2D1::RectF(outboxRect.left + 20, rowY, outboxRect.right - 20, rowY + 28), accentBrush_.Get());
+            rowY += 38.0f;
+            const std::wstring baselines = std::wstring(localization_.Get(TextId::OutboxBaselines)) + L": " +
+                                           std::to_wstring(snapshot.outbox.taskBaselineRows);
+            DrawTextBlock(renderTarget_.Get(), baselines, bodyFormat_.Get(),
+                          D2D1::RectF(outboxRect.left + 20, rowY, outboxRect.right - 20, rowY + 28), secondaryBrush_.Get());
+            rowY += 38.0f;
+            const std::wstring compacted = std::wstring(localization_.Get(TextId::OutboxCompacted)) + L": " +
+                                           std::to_wstring(snapshot.outbox.compactedTaskRows);
+            DrawTextBlock(renderTarget_.Get(), compacted, bodyFormat_.Get(),
+                          D2D1::RectF(outboxRect.left + 20, rowY, outboxRect.right - 20, rowY + 28), secondaryBrush_.Get());
+            rowY += 38.0f;
             DrawTextBlock(renderTarget_.Get(), snapshot.outbox.status, bodyFormat_.Get(),
-                          D2D1::RectF(outboxRect.left + 20, y, outboxRect.right - 20, y + 28), warningBrush_.Get());
+                          D2D1::RectF(outboxRect.left + 20, rowY, outboxRect.right - 20, rowY + 28), warningBrush_.Get());
         }
         finish();
         return;
@@ -452,19 +577,26 @@ void App::Draw() {
                   D2D1::RectF(sourceRect.left + 20, sourceRect.top + 16, sourceRect.right - 20, sourceRect.top + 45), primaryBrush_.Get());
     const std::wstring zcode = std::wstring(localization_.Get(TextId::ZCode)) + L"  " + SourceText(localization_, snapshot.zcodeStatus);
     const std::wstring command = std::wstring(localization_.Get(TextId::CommandCode)) + L"  " + SourceText(localization_, snapshot.commandCodeStatus);
-    DrawTextBlock(renderTarget_.Get(), zcode, bodyFormat_.Get(), D2D1::RectF(sourceRect.left + 20, sourceRect.top + 58, sourceRect.right - 20, sourceRect.top + 85), secondaryBrush_.Get());
-    DrawTextBlock(renderTarget_.Get(), command, bodyFormat_.Get(), D2D1::RectF(sourceRect.left + 20, sourceRect.top + 88, sourceRect.right - 20, sourceRect.top + 116), secondaryBrush_.Get());
+    DrawTextBlock(renderTarget_.Get(), zcode, bodyFormat_.Get(),
+                  D2D1::RectF(sourceRect.left + 20, sourceRect.top + 58, sourceRect.right - 20, sourceRect.top + 85), secondaryBrush_.Get());
+    DrawTextBlock(renderTarget_.Get(), command, bodyFormat_.Get(),
+                  D2D1::RectF(sourceRect.left + 20, sourceRect.top + 88, sourceRect.right - 20, sourceRect.top + 116), secondaryBrush_.Get());
 
     DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::AgentStatus), sectionFormat_.Get(),
                   D2D1::RectF(opsRect.left + 20, opsRect.top + 16, opsRect.right - 20, opsRect.top + 45), primaryBrush_.Get());
     const std::wstring service = std::wstring(localization_.Get(TextId::WindowsService)) + L"  " + ServiceText(localization_, snapshot.service);
-    DrawTextBlock(renderTarget_.Get(), service, bodyFormat_.Get(), D2D1::RectF(opsRect.left + 20, opsRect.top + 58, opsRect.right - 20, opsRect.top + 85), secondaryBrush_.Get());
-    std::wstring diagnostics = std::wstring(localization_.Get(TextId::AgentVersion)) + L"  " + (snapshot.agentVersion.empty() ? L"—" : snapshot.agentVersion);
+    DrawTextBlock(renderTarget_.Get(), service, bodyFormat_.Get(),
+                  D2D1::RectF(opsRect.left + 20, opsRect.top + 58, opsRect.right - 20, opsRect.top + 85), secondaryBrush_.Get());
+    std::wstring diagnostics = std::wstring(localization_.Get(TextId::AgentVersion)) + L"  " +
+                               (snapshot.agentVersion.empty() ? L"—" : snapshot.agentVersion);
     if (snapshot.uptimeSeconds) diagnostics += L"  ·  " + DurationText(*snapshot.uptimeSeconds);
-    DrawTextBlock(renderTarget_.Get(), diagnostics, bodyFormat_.Get(), D2D1::RectF(opsRect.left + 20, opsRect.top + 88, opsRect.right - 20, opsRect.top + 116), secondaryBrush_.Get());
+    DrawTextBlock(renderTarget_.Get(), diagnostics, bodyFormat_.Get(),
+                  D2D1::RectF(opsRect.left + 20, opsRect.top + 88, opsRect.right - 20, opsRect.top + 116), secondaryBrush_.Get());
     if (snapshot.outbox.available) {
-        const std::wstring outbox = std::wstring(localization_.Get(TextId::OutboxPending)) + L"  " + std::to_wstring(snapshot.outbox.pendingEvents);
-        DrawTextBlock(renderTarget_.Get(), outbox, smallFormat_.Get(), D2D1::RectF(opsRect.left + 20, opsRect.top + 119, opsRect.right - 20, opsRect.bottom - 10), secondaryBrush_.Get());
+        const std::wstring outbox = std::wstring(localization_.Get(TextId::OutboxPending)) + L"  " +
+                                    std::to_wstring(snapshot.outbox.pendingEvents);
+        DrawTextBlock(renderTarget_.Get(), outbox, smallFormat_.Get(),
+                      D2D1::RectF(opsRect.left + 20, opsRect.top + 119, opsRect.right - 20, opsRect.bottom - 10), secondaryBrush_.Get());
     }
 
     finish();
@@ -474,8 +606,10 @@ void App::Resize() {
     if (!renderTarget_ || window_ == nullptr) return;
     RECT client{};
     GetClientRect(window_, &client);
-    (void)renderTarget_->Resize(D2D1::SizeU(static_cast<UINT32>(std::max<LONG>(1, client.right - client.left)),
-                                            static_cast<UINT32>(std::max<LONG>(1, client.bottom - client.top))));
+    (void)renderTarget_->Resize(D2D1::SizeU(
+        static_cast<UINT32>(std::max<LONG>(1, client.right - client.left)),
+        static_cast<UINT32>(std::max<LONG>(1, client.bottom - client.top))
+    ));
 }
 
 void App::AddTrayIcon() {
@@ -505,15 +639,18 @@ void App::RemoveTrayIcon() {
 void App::ShowTrayMenu(POINT point) {
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return;
+
     const std::wstring open(localization_.Get(TextId::OpenDashboard));
+    const std::wstring mini(localization_.Get(miniHud_ ? TextId::FullDashboard : TextId::MiniHud));
     const std::wstring actions(localization_.Get(TextId::ServiceActions));
-    const std::wstring start(localization_.Get(TextId::StartService));
-    const std::wstring stop(localization_.Get(TextId::StopService));
-    const std::wstring restart(localization_.Get(TextId::RestartService));
-    const std::wstring upgrade(localization_.Get(TextId::UpgradeService));
+    const std::wstring start(localization_.Get(TextId::ServiceStartAction));
+    const std::wstring stop(localization_.Get(TextId::ServiceStopAction));
+    const std::wstring restart(localization_.Get(TextId::ServiceRestartAction));
+    const std::wstring upgrade(localization_.Get(TextId::ServiceUpgradeAction));
     const std::wstring exit(localization_.Get(TextId::Exit));
 
     AppendMenuW(menu, MF_STRING, kTrayOpen, open.c_str());
+    AppendMenuW(menu, MF_STRING, kTrayMiniHud, mini.c_str());
     HMENU serviceMenu = CreatePopupMenu();
     if (serviceMenu != nullptr) {
         AppendMenuW(serviceMenu, MF_STRING, kTrayServiceStart, start.c_str());
@@ -532,23 +669,23 @@ void App::ShowTrayMenu(POINT point) {
 
 void App::RunPrivilegedCommand(UINT commandId) {
     PrivilegedAction action{};
-    TextId actionText = TextId::RestartService;
+    TextId actionText = TextId::ServiceRestartAction;
     switch (commandId) {
         case kTrayServiceStart:
             action = PrivilegedAction::Start;
-            actionText = TextId::StartService;
+            actionText = TextId::ServiceStartAction;
             break;
         case kTrayServiceStop:
             action = PrivilegedAction::Stop;
-            actionText = TextId::StopService;
+            actionText = TextId::ServiceStopAction;
             break;
         case kTrayServiceRestart:
             action = PrivilegedAction::Restart;
-            actionText = TextId::RestartService;
+            actionText = TextId::ServiceRestartAction;
             break;
         case kTrayServiceUpgrade:
             action = PrivilegedAction::Upgrade;
-            actionText = TextId::UpgradeService;
+            actionText = TextId::ServiceUpgradeAction;
             break;
         default:
             return;
@@ -568,6 +705,64 @@ void App::RunPrivilegedCommand(UINT commandId) {
     pollWake_.notify_all();
 }
 
+void App::ToggleMiniHud() {
+    ApplyMiniHud(!miniHud_);
+}
+
+void App::ApplyMiniHud(bool enabled) {
+    if (window_ == nullptr || miniHud_ == enabled) return;
+
+    if (enabled) {
+        RECT current{};
+        if (GetWindowRect(window_, &current) != FALSE && !IsIconic(window_)) {
+            normalRect_ = current;
+            hasNormalRect_ = true;
+        }
+        miniHud_ = true;
+        RECT target = normalRect_;
+        int x = target.left;
+        int y = target.top;
+        if (!hasNormalRect_) {
+            RECT current{};
+            if (GetWindowRect(window_, &current) != FALSE) {
+                x = current.left;
+                y = current.top;
+            }
+        }
+        SetWindowPos(window_, HWND_TOPMOST, x, y, kMiniWidth, kMiniHeight, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    } else {
+        miniHud_ = false;
+        if (hasNormalRect_) {
+            SetWindowPos(window_, HWND_NOTOPMOST,
+                         normalRect_.left, normalRect_.top,
+                         normalRect_.right - normalRect_.left,
+                         normalRect_.bottom - normalRect_.top,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        } else {
+            SetWindowPos(window_, HWND_NOTOPMOST, 0, 0, 1120, 720,
+                         SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+    }
+    DiscardRenderTarget();
+    PersistWindowState();
+    InvalidateRect(window_, nullptr, FALSE);
+}
+
+void App::PersistWindowState() noexcept {
+    if (window_ == nullptr) return;
+    RECT rect{};
+    if (!miniHud_ && GetWindowRect(window_, &rect) != FALSE && !IsIconic(window_)) {
+        normalRect_ = rect;
+        hasNormalRect_ = true;
+    }
+    if (!hasNormalRect_) return;
+    WindowState state;
+    state.normalRect = normalRect_;
+    state.hasNormalRect = true;
+    state.miniHud = miniHud_;
+    SaveWindowState(state);
+}
+
 void App::ShowDashboard() {
     if (window_ == nullptr) return;
     ShowWindow(window_, SW_RESTORE);
@@ -578,6 +773,7 @@ void App::ShowDashboard() {
 
 void App::HideDashboard() {
     if (window_ == nullptr) return;
+    PersistWindowState();
     ShowWindow(window_, SW_HIDE);
     visible_.store(false, std::memory_order_relaxed);
     pollWake_.notify_all();
@@ -592,29 +788,40 @@ void App::StartPoller() {
             HealthProbe health;
             while (!stop.stop_requested()) {
                 const bool visible = visible_.load(std::memory_order_relaxed);
+                bool repaint = false;
                 if (visible) {
                     DashboardSnapshot next = client.Poll();
                     {
                         std::lock_guard lock(snapshotMutex_);
+                        repaint = !DisplayEquivalent(snapshot_, next);
                         snapshot_ = std::move(next);
                     }
-                    if (window_ != nullptr) PostMessageW(window_, kSnapshotMessage, 0, 0);
+                    if (repaint && window_ != nullptr) PostMessageW(window_, kSnapshotMessage, 0, 0);
                 } else {
                     const bool healthy = health.Check();
                     const ServiceState service = QueryAgentServiceState();
                     std::lock_guard lock(snapshotMutex_);
-                    snapshot_.service = service;
-                    if (!healthy) snapshot_.connection = ConnectionState::Offline;
+                    DashboardSnapshot next = snapshot_;
+                    next.service = service;
+                    if (!healthy) next.connection = ConnectionState::Offline;
+                    snapshot_ = std::move(next);
                 }
+
                 const auto delay = visible ? std::chrono::seconds(2) : std::chrono::seconds(20);
                 std::unique_lock waitLock(pollWakeMutex_);
                 pollWake_.wait_for(waitLock, delay);
             }
         } catch (...) {
-            std::lock_guard lock(snapshotMutex_);
-            snapshot_.connection = ConnectionState::Offline;
-            snapshot_.error = L"poller initialization failed";
-            if (window_ != nullptr) PostMessageW(window_, kSnapshotMessage, 0, 0);
+            bool repaint = false;
+            {
+                std::lock_guard lock(snapshotMutex_);
+                DashboardSnapshot next = snapshot_;
+                next.connection = ConnectionState::Offline;
+                next.error = L"poller initialization failed";
+                repaint = !DisplayEquivalent(snapshot_, next);
+                snapshot_ = std::move(next);
+            }
+            if (repaint && window_ != nullptr) PostMessageW(window_, kSnapshotMessage, 0, 0);
         }
         winrt::uninit_apartment();
     });
@@ -662,12 +869,13 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             pollWake_.notify_all();
             return 0;
         case WM_LBUTTONUP: {
+            if (miniHud_) break;
             const float x = static_cast<float>(GET_X_LPARAM(lParam));
             const float y = static_cast<float>(GET_Y_LPARAM(lParam));
             if (x >= 0.0f && x <= kSidebarWidth) {
                 for (int i = 0; i < 3; ++i) {
-                    const float top = kNavTop + static_cast<float>(i) * (kNavHeight + kNavGap);
-                    if (y >= top && y <= top + kNavHeight) {
+                    const float navTop = kNavTop + static_cast<float>(i) * (kNavHeight + kNavGap);
+                    if (y >= navTop && y <= navTop + kNavHeight) {
                         page_ = i == 0 ? Page::Dashboard : (i == 1 ? Page::Sources : Page::Diagnostics);
                         InvalidateRect(window_, nullptr, FALSE);
                         return 0;
@@ -677,23 +885,37 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             break;
         }
         case WM_KEYDOWN:
+            if (wParam == L'M') {
+                ToggleMiniHud();
+                return 0;
+            }
+            if (miniHud_) break;
             if (wParam == L'1') page_ = Page::Dashboard;
             else if (wParam == L'2') page_ = Page::Sources;
             else if (wParam == L'3') page_ = Page::Diagnostics;
             else break;
             InvalidateRect(window_, nullptr, FALSE);
             return 0;
+        case WM_EXITSIZEMOVE:
+            PersistWindowState();
+            return 0;
+        case WM_SETTINGCHANGE:
+            DiscardRenderTarget();
+            InvalidateRect(window_, nullptr, FALSE);
+            return 0;
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<RECT*>(lParam);
-            SetWindowPos(window_, nullptr, suggested->left, suggested->top,
+            SetWindowPos(window_, miniHud_ ? HWND_TOPMOST : nullptr,
+                         suggested->left, suggested->top,
                          suggested->right - suggested->left, suggested->bottom - suggested->top,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+                         SWP_NOACTIVATE);
+            PersistWindowState();
             return 0;
         }
         case WM_GETMINMAXINFO: {
             auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-            info->ptMinTrackSize.x = 900;
-            info->ptMinTrackSize.y = 580;
+            info->ptMinTrackSize.x = miniHud_ ? 500 : 900;
+            info->ptMinTrackSize.y = miniHud_ ? 190 : 580;
             return 0;
         }
         case kSnapshotMessage:
@@ -710,6 +932,7 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_COMMAND: {
             const UINT commandId = LOWORD(wParam);
             if (commandId == kTrayOpen) { ShowDashboard(); return 0; }
+            if (commandId == kTrayMiniHud) { ToggleMiniHud(); return 0; }
             if (commandId == kTrayExit) { exitRequested_ = true; DestroyWindow(window_); return 0; }
             if (commandId >= kTrayServiceStart && commandId <= kTrayServiceUpgrade) {
                 RunPrivilegedCommand(commandId);
@@ -721,6 +944,7 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             if (exitRequested_) DestroyWindow(window_); else HideDashboard();
             return 0;
         case WM_DESTROY:
+            PersistWindowState();
             StopPoller();
             RemoveTrayIcon();
             window_ = nullptr;

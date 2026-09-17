@@ -23,6 +23,8 @@ std::wstring_view En(TextId id) noexcept {
         case TextId::Sources: return L"Sources";
         case TextId::Diagnostics: return L"Diagnostics";
         case TextId::Settings: return L"Settings";
+        case TextId::MiniHud: return L"Mini HUD";
+        case TextId::FullDashboard: return L"Full dashboard";
         case TextId::AgentStatus: return L"Agent status";
         case TextId::WindowsService: return L"Windows service";
         case TextId::HubOutbox: return L"Hub outbox";
@@ -79,6 +81,8 @@ std::wstring_view Zh(TextId id) noexcept {
         case TextId::Sources: return L"数据源";
         case TextId::Diagnostics: return L"诊断信息";
         case TextId::Settings: return L"设置";
+        case TextId::MiniHud: return L"迷你 HUD";
+        case TextId::FullDashboard: return L"完整仪表盘";
         case TextId::AgentStatus: return L"Agent 状态";
         case TextId::WindowsService: return L"Windows 服务";
         case TextId::HubOutbox: return L"Hub 上传队列";

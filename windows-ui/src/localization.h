@@ -11,6 +11,8 @@ enum class TextId {
     Sources,
     Diagnostics,
     Settings,
+    MiniHud,
+    FullDashboard,
     AgentStatus,
     WindowsService,
     HubOutbox,
@@ -56,9 +58,6 @@ enum class TextId {
     Exit,
     LocalApiUnavailable,
 
-    // Source-compatible aliases for UI6 code written before the Win32
-    // StartService macro collision was discovered. The UI does not call the
-    // SCM StartService API directly; privileged mutations are CLI-delegated.
     StartService = ServiceStartAction,
     StopService = ServiceStopAction,
     RestartService = ServiceRestartAction,
