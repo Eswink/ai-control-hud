@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -79,6 +80,19 @@ func runServe(args []string) error {
 		defer discovery.Close()
 	}
 
+	var maintenanceWG sync.WaitGroup
+	maintenanceWG.Add(1)
+	go func() {
+		defer maintenanceWG.Done()
+		hub.RunMaintenance(ctx, store, config, func(format string, args ...any) {
+			fmt.Printf(format+"\n", args...)
+		})
+	}()
+	defer func() {
+		cancel()
+		maintenanceWG.Wait()
+	}()
+
 	address := net.JoinHostPort(*host, strconv.Itoa(*port))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -93,7 +107,7 @@ func runServe(args []string) error {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
-	fmt.Printf("[hub] version=%s listen=%s database=%s agent=%s discovery=%t udp=%d hub=%s\n",
+	fmt.Printf("[hub] version=%s listen=%s database=%s agent=%s discovery=%t udp=%d hub=%s retention=%dd/%d..%d maintenance=%s\n",
 		version,
 		address,
 		config.DatabasePath,
@@ -101,6 +115,10 @@ func runServe(args []string) error {
 		config.DiscoveryEnabled,
 		config.DiscoveryPort,
 		config.HubID,
+		config.EventRetentionDays,
+		config.EventRetentionMin,
+		config.EventRetentionMax,
+		config.MaintenanceInterval,
 	)
 
 	httpErr := make(chan error, 1)

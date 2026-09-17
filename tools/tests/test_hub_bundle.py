@@ -34,6 +34,7 @@ def test_production_bundle_records_version_component_and_checksums(tmp_path: Pat
         assert "scripts/ai-control-hub-upgrade.sh" in names
         assert "docs/HUB_DEPLOYMENT.md" in names
         assert "docs/HUB_UPGRADE.md" in names
+        assert "docs/HUB_RETENTION.md" in names
         assert "BUILD_INFO.txt" in names
         assert "SHA256SUMS" in names
 

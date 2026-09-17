@@ -22,7 +22,9 @@ on:
       - 'scripts/ci-hub-lan-doctor-smoke.sh'
       - 'scripts/ci-hub-upgrade-smoke.sh'
       - 'scripts/ci-hub-runtime-smoke.py'
+      - 'scripts/ci-hub-resource-smoke.py'
       - 'tools/tests/test_hub_runtime_smoke.py'
+      - 'tools/tests/test_hub_bundle.py'
       - 'scripts/hub_bundle.py'
       - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
@@ -30,8 +32,10 @@ on:
       - 'docs/HUB_DEPLOYMENT.md'
       - 'docs/HUB_LAN_DOCTOR.md'
       - 'docs/HUB_UPGRADE.md'
+      - 'docs/HUB_RETENTION.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
+      - 'docs/RESOURCE_BUDGETS.md'
       - '.github/workflows/go-hub.yml'
   pull_request:
     paths:
@@ -54,7 +58,9 @@ on:
       - 'scripts/ci-hub-lan-doctor-smoke.sh'
       - 'scripts/ci-hub-upgrade-smoke.sh'
       - 'scripts/ci-hub-runtime-smoke.py'
+      - 'scripts/ci-hub-resource-smoke.py'
       - 'tools/tests/test_hub_runtime_smoke.py'
+      - 'tools/tests/test_hub_bundle.py'
       - 'scripts/hub_bundle.py'
       - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
@@ -62,8 +68,10 @@ on:
       - 'docs/HUB_DEPLOYMENT.md'
       - 'docs/HUB_LAN_DOCTOR.md'
       - 'docs/HUB_UPGRADE.md'
+      - 'docs/HUB_RETENTION.md'
       - 'docs/GO_HUB_MIGRATION.md'
       - 'docs/HUB_V2_PLAN.md'
+      - 'docs/RESOURCE_BUDGETS.md'
       - '.github/workflows/go-hub.yml'
   workflow_dispatch:
 
@@ -134,6 +142,9 @@ jobs:
 
       - name: Go Hub runtime smoke
         run: python3 scripts/ci-hub-runtime-smoke.py --hub dist/ai-control-hub
+
+      - name: Go Hub resource growth smoke
+        run: python3 scripts/ci-hub-resource-smoke.py --hub dist/ai-control-hub --requests 1000
 
       - name: Validate Go Hub systemd assets
         shell: bash
