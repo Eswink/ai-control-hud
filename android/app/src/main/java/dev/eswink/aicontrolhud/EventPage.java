@@ -100,7 +100,7 @@ final class EventPage {
     }
 
     boolean requiresRebase(long after) {
-        return events.isEmpty() && latestSeq < after;
+        return (events.isEmpty() && latestSeq < after) || cursorPredatesRetention(after);
     }
 
     boolean cursorPredatesRetention(long after) {
