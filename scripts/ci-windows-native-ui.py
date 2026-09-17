@@ -2,6 +2,7 @@
 """Static architecture, privilege-boundary and low-refresh gates for the native Windows Agent UI."""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -102,6 +103,19 @@ def check_mini_hud_contract() -> None:
             fail(f"fixed-rate render/animation primitive is forbidden: {token}")
 
 
+def check_warning_policy(cmake: str) -> None:
+    if "/W4" not in cmake or "/WX" not in cmake:
+        fail("MSVC release build must keep /W4 and /WX")
+    suppressions = re.findall(r"/wd\d+", cmake, flags=re.IGNORECASE)
+    normalized = [item.lower() for item in suppressions]
+    if normalized not in ([], ["/wd4456"]):
+        fail(f"unexpected MSVC warning suppressions: {suppressions}")
+    if normalized == ["/wd4456"]:
+        required_scope = 'set_source_files_properties(src/app.cpp PROPERTIES COMPILE_OPTIONS "/wd4456")'
+        if required_scope not in cmake:
+            fail("C4456 exception must remain source-local to src/app.cpp")
+
+
 def main() -> int:
     cmake = text(UI / "CMakeLists.txt")
     joined = cmake + "\n" + "\n".join(
@@ -119,6 +133,7 @@ def main() -> int:
     for token in required_cmake:
         if token not in cmake:
             fail(f"CMake native contract is missing {token}")
+    check_warning_policy(cmake)
 
     client = text(SRC / "agent_client.cpp")
     for token in ("WinHttpOpen", "127.0.0.1", "8787", "/api/v1/state", "/api/v1/diagnostics"):
@@ -142,7 +157,7 @@ def main() -> int:
     check_mini_hud_contract()
     print(
         "[windows-native-ui] PASS native=C++20/Win32+D2D+DWrite transport=WinHTTP "
-        "bounded=yes uac=allowlisted-delegation repaint=semantic mini-hud=persistent"
+        "bounded=yes uac=allowlisted-delegation repaint=semantic mini-hud=persistent warnings=strict"
     )
     return 0
 
