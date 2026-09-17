@@ -43,12 +43,18 @@ var errGoalSchemaUnavailable = errors.New("ZCode live Goal schema unavailable")
 type Snapshot struct {
 	Summary domain.ZCodeSummary
 	Tasks   []domain.TaskSummary
+
+	// sessionIDs never leave the collector. They let us exclude the live
+	// session from the lagging task-index projection before merging history.
+	sessionIDs map[string]struct{}
 }
 
 type Collector struct {
 	RuntimeDB             string
 	TaskIndexDB           string
+	LogDir                string
 	HeartbeatSeconds      int
+	TurnFreshSeconds      int
 	RecentTerminalSeconds int
 	TaskMaxAgeSeconds     int
 	TaskLimit             int
@@ -56,10 +62,13 @@ type Collector struct {
 }
 
 func New(runtimeDB, taskIndexDB string) *Collector {
+	runtimeDB = expandHome(runtimeDB)
 	return &Collector{
-		RuntimeDB:             expandHome(runtimeDB),
+		RuntimeDB:             runtimeDB,
 		TaskIndexDB:           expandHome(taskIndexDB),
+		LogDir:                defaultLogDir(runtimeDB),
 		HeartbeatSeconds:      120,
+		TurnFreshSeconds:      1800,
 		RecentTerminalSeconds: 1800,
 		TaskMaxAgeSeconds:     86400,
 		TaskLimit:             20,
@@ -78,7 +87,9 @@ func NewFromEnvironment() (*Collector, bool) {
 		return nil, false
 	}
 	collector := New(runtimeDB, taskIndexDB)
+	collector.LogDir = envOr("HUD_ZCODE_LOG_DIR", defaultLogDir(runtimeDB))
 	collector.HeartbeatSeconds = boundedPositiveEnv("HUD_ZCODE_GOAL_HEARTBEAT_SECONDS", 120, 3600)
+	collector.TurnFreshSeconds = boundedPositiveEnv("HUD_ZCODE_TURN_FRESH_SECONDS", 1800, 4*3600)
 	collector.RecentTerminalSeconds = boundedPositiveEnv("HUD_ZCODE_GOAL_RECENT_TERMINAL_SECONDS", 1800, 86400)
 	collector.TaskMaxAgeSeconds = boundedPositiveEnv("HUD_ZCODE_TASK_MAX_AGE_SECONDS", 86400, 30*86400)
 	collector.TaskLimit = boundedPositiveEnv("HUD_ZCODE_TASK_LIMIT", 20, 100)
@@ -89,25 +100,49 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	if fileExists(c.RuntimeDB) {
-		live, available, err := c.collectGoals(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if available && live != nil && len(live.Tasks) > 0 {
-			return live, nil
-		}
 
-		runtime, runtimeAvailable, err := c.collectRuntimeSessions(ctx)
+	var primary *Snapshot
+	if fileExists(c.RuntimeDB) {
+		goals, _, err := c.collectGoals(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if runtimeAvailable && runtime != nil && len(runtime.Tasks) > 0 {
-			return runtime, nil
+		if snapshotHasActiveTask(goals) {
+			// A fresh Goal remains authoritative over ordinary-session inference.
+			primary = goals
+		} else {
+			runtime, _, runtimeErr := c.collectRuntimeSessions(ctx)
+			if runtimeErr != nil {
+				if goals == nil || len(goals.Tasks) == 0 {
+					return nil, runtimeErr
+				}
+				primary = goals
+			} else if runtime != nil && len(runtime.Tasks) > 0 {
+				primary = mergeSnapshots(runtime, goals, bounded(c.TaskLimit, 20, 100))
+			} else if goals != nil && len(goals.Tasks) > 0 {
+				primary = goals
+			}
 		}
 	}
+
 	if fileExists(c.TaskIndexDB) {
-		return c.collectTaskIndex(ctx)
+		history, err := c.collectTaskIndexExcluding(ctx, snapshotSessionIDs(primary))
+		if primary != nil && len(primary.Tasks) > 0 {
+			// The task index is history when a trustworthy live/runtime source is
+			// available. A history read failure must not erase live state.
+			if err == nil {
+				primary = mergeSnapshots(primary, history, bounded(c.TaskLimit, 20, 100))
+			}
+			return primary, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return history, nil
+	}
+
+	if primary != nil && len(primary.Tasks) > 0 {
+		return primary, nil
 	}
 	return nil, errors.New("ZCode task sources are unavailable")
 }
@@ -199,9 +234,11 @@ func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 
 	now := c.Now().UTC()
 	tasks := make([]domain.TaskSummary, 0, limit)
+	sessionIDs := make(map[string]struct{}, limit)
 	for _, row := range goalRows {
 		if task := c.goalTask(row, todos[row.SessionID], now); task != nil {
 			tasks = append(tasks, *task)
+			sessionIDs[row.SessionID] = struct{}{}
 		}
 		if len(tasks) >= limit {
 			break
@@ -210,7 +247,7 @@ func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 	if len(tasks) == 0 {
 		return nil, true, nil
 	}
-	return &Snapshot{Summary: summarizeTasks(tasks), Tasks: tasks}, true, nil
+	return &Snapshot{Summary: summarizeTasks(tasks), Tasks: tasks, sessionIDs: sessionIDs}, true, nil
 }
 
 func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domain.TaskSummary {
@@ -235,7 +272,14 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 			status = domain.TaskFailed
 		case targetStatus == domain.TaskCompleted && (len(todos) == 0 || allCompleted(todoStatuses)):
 			status = domain.TaskCompleted
-		case containsStatus(todoStatuses, domain.TaskWaiting) && !containsStatus(todoStatuses, domain.TaskRunning):
+		case targetStatus == domain.TaskRunning:
+			// A fresh active Goal target is stronger liveness evidence than a
+			// pending todo. Pause/resume can leave the todo projection at pending
+			// while the Goal runner is already working again.
+			status = domain.TaskRunning
+		case containsStatus(todoStatuses, domain.TaskRunning):
+			status = domain.TaskRunning
+		case targetStatus == domain.TaskWaiting || containsStatus(todoStatuses, domain.TaskWaiting):
 			status = domain.TaskWaiting
 		default:
 			status = domain.TaskRunning
@@ -259,7 +303,6 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 					break
 				}
 			}
-		}
 		if activity != nil {
 			break
 		}
@@ -298,6 +341,10 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 }
 
 func (c *Collector) collectTaskIndex(ctx context.Context) (*Snapshot, error) {
+	return c.collectTaskIndexExcluding(ctx, nil)
+}
+
+func (c *Collector) collectTaskIndexExcluding(ctx context.Context, exclude map[string]struct{}) (*Snapshot, error) {
 	db, err := openReadOnly(c.TaskIndexDB)
 	if err != nil {
 		return nil, errors.New("ZCode task index read failed")
@@ -316,7 +363,7 @@ func (c *Collector) collectTaskIndex(ctx context.Context) (*Snapshot, error) {
 		FROM tasks
 		WHERE archived = 0 AND deleted = 0 AND updated_at >= ?
 		ORDER BY pinned DESC, updated_at DESC
-		LIMIT ?`, cutoffMS, limit)
+		LIMIT ?`, cutoffMS, limit*4)
 	if err != nil {
 		return nil, errors.New("ZCode task index read failed")
 	}
@@ -330,6 +377,9 @@ func (c *Collector) collectTaskIndex(ctx context.Context) (*Snapshot, error) {
 		if err := rows.Scan(&workspaceKey, &workspacePath, &taskID, &title, &status, &updatedAt); err != nil {
 			return nil, errors.New("ZCode task index read failed")
 		}
+		if _, skip := exclude[taskID]; skip {
+			continue
+		}
 		workspace := workspaceLabel(workspacePath, workspaceKey)
 		taskTitle := truncate(strings.TrimSpace(title), 500)
 		if taskTitle == "" {
@@ -342,28 +392,33 @@ func (c *Collector) collectTaskIndex(ctx context.Context) (*Snapshot, error) {
 			Status:    normalizeStatus(status.String),
 			UpdatedAt: timestamp(updatedAt),
 		})
+		if len(tasks) >= limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, errors.New("ZCode task index read failed")
 	}
 
 	countRows, err := db.QueryContext(ctx, `
-		SELECT task_status, COUNT(*)
+		SELECT task_id, task_status
 		FROM tasks
-		WHERE archived = 0 AND deleted = 0 AND updated_at >= ?
-		GROUP BY task_status`, cutoffMS)
+		WHERE archived = 0 AND deleted = 0 AND updated_at >= ?`, cutoffMS)
 	if err != nil {
 		return nil, errors.New("ZCode task index read failed")
 	}
 	defer countRows.Close()
 	counts := domain.ZCodeSummary{}
 	for countRows.Next() {
+		var taskID string
 		var raw sql.NullString
-		var count int
-		if err := countRows.Scan(&raw, &count); err != nil {
+		if err := countRows.Scan(&taskID, &raw); err != nil {
 			return nil, errors.New("ZCode task index read failed")
 		}
-		addStatusCount(&counts, normalizeStatus(raw.String), count)
+		if _, skip := exclude[taskID]; skip {
+			continue
+		}
+		addStatusCount(&counts, normalizeStatus(raw.String), 1)
 	}
 	if err := countRows.Err(); err != nil {
 		return nil, errors.New("ZCode task index read failed")
@@ -507,6 +562,56 @@ func addStatusCount(summary *domain.ZCodeSummary, status domain.TaskStatus, coun
 	case domain.TaskCompleted:
 		summary.Completed += count
 	}
+}
+
+func mergeSnapshots(primary, secondary *Snapshot, limit int) *Snapshot {
+	if primary == nil {
+		return secondary
+	}
+	if secondary == nil {
+		return primary
+	}
+	result := &Snapshot{
+		Summary: primary.Summary,
+		Tasks:   append([]domain.TaskSummary(nil), primary.Tasks...),
+	}
+	result.Summary.Running += secondary.Summary.Running
+	result.Summary.Waiting += secondary.Summary.Waiting
+	result.Summary.Failed += secondary.Summary.Failed
+	result.Summary.Completed += secondary.Summary.Completed
+	result.sessionIDs = make(map[string]struct{}, len(primary.sessionIDs)+len(secondary.sessionIDs))
+	for id := range primary.sessionIDs {
+		result.sessionIDs[id] = struct{}{}
+	}
+	for id := range secondary.sessionIDs {
+		result.sessionIDs[id] = struct{}{}
+	}
+	for _, task := range secondary.Tasks {
+		if len(result.Tasks) >= limit {
+			break
+		}
+		result.Tasks = append(result.Tasks, task)
+	}
+	return result
+}
+
+func snapshotSessionIDs(snapshot *Snapshot) map[string]struct{} {
+	if snapshot == nil {
+		return nil
+	}
+	return snapshot.sessionIDs
+}
+
+func snapshotHasActiveTask(snapshot *Snapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	for _, task := range snapshot.Tasks {
+		if task.Status == domain.TaskRunning || task.Status == domain.TaskWaiting {
+			return true
+		}
+	}
+	return false
 }
 
 func timestamp(value sql.NullInt64) *time.Time {
