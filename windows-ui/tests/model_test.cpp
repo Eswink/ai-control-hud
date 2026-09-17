@@ -34,6 +34,19 @@ int main() {
     executing.tasks = {TaskView{L"execute", L"repo", L"executing", L"", 4}};
     if (CurrentTask(executing) == nullptr) return 12;
 
+    DashboardSnapshot concurrent;
+    concurrent.tasks = {
+        TaskView{L"Goal task", L"research-system", L"running", L"Cycle 6", 100},
+        TaskView{L"ordinary task", L"animation", L"running", L"", 61},
+        TaskView{L"queued peer", L"paper", L"waiting", L"", 5},
+        TaskView{L"terminal", L"repo", L"completed", L"", 2},
+    };
+    AddConcurrentTaskPreview(concurrent);
+    const TaskView* concurrentCurrent = CurrentTask(concurrent);
+    if (concurrentCurrent == nullptr || concurrentCurrent->title != L"Goal task") return 18;
+    if (concurrentCurrent->activity != L"• ordinary task\n• queued peer\nCycle 6") return 19;
+    if (!concurrent.tasks[1].activity.empty() || !concurrent.tasks[2].activity.empty()) return 20;
+
     snapshot.creditRemaining = 25.0;
     snapshot.creditLimit = 100.0;
     const auto percent = CreditRemainingPercent(snapshot);

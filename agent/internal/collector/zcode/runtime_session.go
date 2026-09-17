@@ -27,6 +27,13 @@ type runtimeSessionMeta struct {
 // terminal. model_usage remains a conservative fallback when no usable turn
 // lifecycle signal exists.
 func (c *Collector) collectRuntimeSessions(ctx context.Context) (*Snapshot, bool, error) {
+	return c.collectRuntimeSessionsExcluding(ctx, nil)
+}
+
+// collectRuntimeSessionsExcluding keeps runtime liveness session-scoped. Goal
+// rows passed in exclude remain authoritative for those exact sessions, while
+// independent ordinary turns continue to surface concurrently.
+func (c *Collector) collectRuntimeSessionsExcluding(ctx context.Context, exclude map[string]struct{}) (*Snapshot, bool, error) {
 	db, err := openReadOnly(c.RuntimeDB)
 	if err != nil {
 		return nil, false, errors.New("ZCode runtime session database read failed")
@@ -54,6 +61,9 @@ func (c *Collector) collectRuntimeSessions(ctx context.Context) (*Snapshot, bool
 	}
 	activeTurns := make([]activeTurn, 0, len(turnStates))
 	for sessionID, state := range turnStates {
+		if _, skip := exclude[sessionID]; skip {
+			continue
+		}
 		if state.active(now, c.TurnFreshSeconds) {
 			activeTurns = append(activeTurns, activeTurn{SessionID: sessionID, State: state})
 		}
@@ -107,6 +117,9 @@ func (c *Collector) collectRuntimeSessions(ctx context.Context) (*Snapshot, bool
 		var meta runtimeSessionMeta
 		if err := rows.Scan(&sessionID, &status, &startedRaw, &meta.Directory, &meta.Path, &meta.Title); err != nil {
 			return nil, true, errors.New("ZCode runtime session database read failed")
+		}
+		if _, skip := exclude[sessionID]; skip {
+			continue
 		}
 		if _, ok := seen[sessionID]; ok {
 			continue

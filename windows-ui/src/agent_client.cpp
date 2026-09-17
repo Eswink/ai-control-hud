@@ -160,6 +160,7 @@ void ParseState(const std::string& body, DashboardSnapshot& snapshot) {
             }
         }
     }
+    AddConcurrentTaskPreview(snapshot);
 
     if (auto command = OptObject(root, L"commandCode")) {
         if (auto health = OptObject(*command, L"health")) {

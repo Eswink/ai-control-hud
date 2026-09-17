@@ -87,6 +87,48 @@ inline const TaskView* CurrentTask(const DashboardSnapshot& snapshot) noexcept {
     return best;
 }
 
+inline TaskView* CurrentTask(DashboardSnapshot& snapshot) noexcept {
+    TaskView* best = nullptr;
+    for (auto& task : snapshot.tasks) {
+        const int priority = TaskPriority(task.status);
+        if (priority > 1) continue;
+        if (best == nullptr || priority < TaskPriority(best->status)) best = &task;
+    }
+    return best;
+}
+
+inline std::wstring CompactPeerTitle(const std::wstring& title) {
+    constexpr std::size_t kMaxPeerTitle = 52;
+    if (title.size() <= kMaxPeerTitle) return title;
+    return title.substr(0, kMaxPeerTitle - 1) + L"…";
+}
+
+// The Dashboard card has a single primary-task surface by design. Preserve that
+// hierarchy while making concurrent ZCode turns visible by prepending at most
+// two bounded peer titles to the primary task's activity text. The full task
+// collection remains unchanged and is still rendered on the Sources page.
+inline void AddConcurrentTaskPreview(DashboardSnapshot& snapshot) {
+    TaskView* current = CurrentTask(snapshot);
+    if (current == nullptr) return;
+
+    std::wstring peers;
+    std::size_t count = 0;
+    for (const auto& task : snapshot.tasks) {
+        if (&task == current || TaskPriority(task.status) > 1) continue;
+        if (!peers.empty()) peers += L"\n";
+        peers += L"• ";
+        peers += CompactPeerTitle(task.title);
+        if (++count >= 2) break;
+    }
+    if (peers.empty()) return;
+
+    if (!current->activity.empty()) {
+        peers += L"\n";
+        peers += current->activity;
+    }
+    current->activity = peers;
+}
+
 inline std::optional<double> CreditRemainingPercent(const DashboardSnapshot& snapshot) noexcept {
     if (!snapshot.creditRemaining || !snapshot.creditLimit || *snapshot.creditLimit <= 0.0) {
         return std::nullopt;

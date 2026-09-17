@@ -107,21 +107,18 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		if err != nil {
 			return nil, err
 		}
-		if snapshotHasActiveTask(goals) {
-			// A fresh Goal remains authoritative over ordinary-session inference.
+
+		// Goal state is authoritative only for the exact Goal session. ZCode can
+		// run an independent ordinary turn at the same time, so always collect
+		// runtime sessions while excluding Goal-owned session IDs from that path.
+		runtime, _, runtimeErr := c.collectRuntimeSessionsExcluding(ctx, snapshotSessionIDs(goals))
+		if runtimeErr != nil {
+			if goals == nil || len(goals.Tasks) == 0 {
+				return nil, runtimeErr
+			}
 			primary = goals
 		} else {
-			runtime, _, runtimeErr := c.collectRuntimeSessions(ctx)
-			if runtimeErr != nil {
-				if goals == nil || len(goals.Tasks) == 0 {
-					return nil, runtimeErr
-				}
-				primary = goals
-			} else if runtime != nil && len(runtime.Tasks) > 0 {
-				primary = mergeSnapshots(runtime, goals, bounded(c.TaskLimit, 20, 100))
-			} else if goals != nil && len(goals.Tasks) > 0 {
-				primary = goals
-			}
+			primary = mergeSnapshots(goals, runtime, bounded(c.TaskLimit, 20, 100))
 		}
 	}
 
@@ -302,7 +299,7 @@ func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domai
 					activity = &text
 					break
 				}
-			}
+		}
 		}
 		if activity != nil {
 			break
