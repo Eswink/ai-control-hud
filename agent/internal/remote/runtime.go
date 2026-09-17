@@ -121,13 +121,28 @@ func (r *Runtime) heartbeatLoop(ctx context.Context) {
 
 func (r *Runtime) eventObserveLoop(ctx context.Context) {
 	defer r.wg.Done()
+	var nextMaintenance time.Time
 	for {
-		if err := r.outbox.Observe(ctx, r.store.Get(), r.utcnow()); err != nil {
+		now := r.utcnow()
+		if err := r.outbox.Observe(ctx, r.store.Get(), now); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			r.report(fmt.Errorf("event observation: %w", err))
 		}
+
+		// Reuse the existing observation goroutine for low-frequency SQLite
+		// hygiene instead of creating another long-lived maintenance goroutine.
+		if nextMaintenance.IsZero() || !now.Before(nextMaintenance) {
+			if _, err := r.outbox.Maintain(ctx, now, events.DefaultBaselineCompactAfter); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				r.report(fmt.Errorf("event outbox maintenance: %w", err))
+			}
+			nextMaintenance = now.Add(events.DefaultOutboxMaintenanceEvery)
+		}
+
 		if !sleepContext(ctx, r.config.EventScanInterval) {
 			return
 		}
