@@ -111,19 +111,18 @@ prepare_config() {
   printf '%s\n' '0123456789abcdef0123456789abcdef' >"$hub_file"
   chmod 0600 "$key_file" "$hub_file"
 
-  sudo "$AGENT" commandcode configure --config "$config" --api-key-file "$key_file"
+  sudo "$AGENT" commandcode configure --config "$config" --api-key-file "$key_file" >/dev/null
   sudo "$AGENT" hub configure \
     --config "$config" \
     --hub-auto \
     --hub-agent-id desktop-main \
-    --hub-token-file "$hub_file"
+    --hub-token-file "$hub_file" >/dev/null
   sudo "$AGENT" configure \
     --config "$config" \
     --runtime-db "$RUNTIME_DB" \
     --task-index-db "$TASK_INDEX_DB" \
-    --listen "127.0.0.1:$port"
+    --listen "127.0.0.1:$port" >/dev/null
   rm -f "$key_file" "$hub_file"
-  CURRENT_CONFIG="$config"
   printf '%s\n' "$config"
 }
 
@@ -157,6 +156,7 @@ EOF
 
 echo "[h29-ci] non-Agent legacy-name Hub unit must be untouched"
 config="$(prepare_config hub-preserve 18790)"
+CURRENT_CONFIG="$config"
 hub_unit_tmp="$TMP/hub-fixture.service"
 cat >"$hub_unit_tmp" <<'EOF'
 # H29-CI-FIXTURE hub
@@ -178,6 +178,7 @@ HOME="$HOME_ROOT" bash "$ADAPTER" install --agent "$AGENT" --config "$config"
 sudo test -f "$NEW_UNIT"
 [[ "$(hash_root_file "$LEGACY_UNIT")" == "$hub_unit_hash" ]] || { echo "Hub unit changed during Agent install" >&2; exit 1; }
 [[ "$(systemctl is-enabled "$LEGACY_SERVICE" 2>/dev/null || true)" == "enabled" ]] || { echo "Hub unit enable state changed during Agent install" >&2; exit 1; }
+sudo "$AGENT" hub remove --config "$config" >/dev/null
 bash "$ADAPTER" remove --config "$config" --purge
 CURRENT_CONFIG=""
 [[ "$(hash_root_file "$LEGACY_UNIT")" == "$hub_unit_hash" ]] || { echo "Hub unit changed during Agent remove" >&2; exit 1; }
@@ -186,6 +187,7 @@ remove_fixture_legacy_unit
 
 echo "[h29-ci] inactive historical Agent migrates and stays inactive"
 config="$(prepare_config legacy-inactive 18791)"
+CURRENT_CONFIG="$config"
 install_legacy_agent_binary_and_unit "$config"
 config_hash="$(hash_root_file "$config")"
 command_secret="$(sudo "$AGENT" config get --config "$config" --field command-code-secret)"
@@ -203,6 +205,7 @@ reset_agent_state "$config"
 
 echo "[h29-ci] active historical Agent rejects bad candidate and remains healthy"
 config="$(prepare_config legacy-active 18792)"
+CURRENT_CONFIG="$config"
 install_legacy_agent_binary_and_unit "$config"
 sudo systemctl start "$LEGACY_SERVICE"
 wait_state 18792
