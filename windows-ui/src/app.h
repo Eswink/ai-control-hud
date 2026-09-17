@@ -38,6 +38,10 @@ private:
     static constexpr UINT kTrayMessage = WM_APP + 2;
     static constexpr UINT kTrayOpen = 41001;
     static constexpr UINT kTrayExit = 41002;
+    static constexpr UINT kTrayServiceStart = 41011;
+    static constexpr UINT kTrayServiceStop = 41012;
+    static constexpr UINT kTrayServiceRestart = 41013;
+    static constexpr UINT kTrayServiceUpgrade = 41014;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
@@ -53,6 +57,7 @@ private:
     void AddTrayIcon();
     void RemoveTrayIcon();
     void ShowTrayMenu(POINT point);
+    void RunPrivilegedCommand(UINT commandId);
     void ShowDashboard();
     void HideDashboard();
 
