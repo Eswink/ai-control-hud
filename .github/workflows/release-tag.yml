@@ -27,6 +27,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PROD_KEYSTORE_BASE64: ${{ secrets.HUD_ANDROID_KEYSTORE_BASE64 }}
+          PROD_STORE_PASSWORD: ${{ secrets.HUD_ANDROID_KEYSTORE_PASSWORD }}
+          PROD_KEY_ALIAS: ${{ secrets.HUD_ANDROID_KEY_ALIAS }}
+          PROD_KEY_PASSWORD: ${{ secrets.HUD_ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           test -f .release-request
@@ -45,6 +49,15 @@ jobs:
           if [[ ! "$target" =~ ^[0-9a-f]{40}$ ]]; then
             echo "invalid target commit: $target" >&2
             exit 1
+          fi
+
+          if [[ "$version" != *-* ]]; then
+            for value in "$PROD_KEYSTORE_BASE64" "$PROD_STORE_PASSWORD" "$PROD_KEY_ALIAS" "$PROD_KEY_PASSWORD"; do
+              if [[ -z "$value" ]]; then
+                echo 'stable release request rejected: production Android signing secrets are incomplete' >&2
+                exit 1
+              fi
+            done
           fi
 
           git fetch origin main --tags --force
