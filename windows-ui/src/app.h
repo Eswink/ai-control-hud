@@ -9,8 +9,9 @@
 #include <wrl/client.h>
 
 #include <atomic>
-#include <jthread>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
 
 namespace aicontrol::ui {
 
@@ -73,6 +74,8 @@ private:
     DashboardSnapshot snapshot_;
     std::jthread poller_;
     std::atomic_bool visible_{true};
+    std::condition_variable_any pollWake_;
+    std::mutex pollWakeMutex_;
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2dFactory_;
     Microsoft::WRL::ComPtr<IDWriteFactory> dwriteFactory_;
