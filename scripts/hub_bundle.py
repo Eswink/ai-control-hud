@@ -59,10 +59,8 @@ def build_info_text(version: str) -> str:
     )
 
 
-def write_build_info(destination: Path, version: str) -> str:
-    text = build_info_text(version)
-    (destination / "BUILD_INFO.txt").write_text(text, encoding="utf-8")
-    return text
+def write_build_info(destination: Path, version: str) -> None:
+    (destination / "BUILD_INFO.txt").write_text(build_info_text(version), encoding="utf-8")
 
 
 def write_checksums(destination: Path) -> None:
