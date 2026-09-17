@@ -25,7 +25,9 @@ These values are engineering targets, not protocol fields. Absolute memory numbe
 
 Absolute values become hard gates only after several stable release-build measurements establish runner/device variance.
 
-## First measured Hub baseline
+## Measured Hub baselines
+
+### R0 lightweight read baseline
 
 Go Hub CI #60 measured the statically linked PR #93 release binary on the GitHub-hosted Ubuntu 24.04 runner with Go 1.27.1. After readiness, the smoke issued 1,000 loopback `GET /api/v1/health` requests and sampled Linux `/proc` before and after the workload:
 
@@ -35,7 +37,33 @@ Go Hub CI #60 measured the statically linked PR #93 release binary on the GitHub
 | file descriptors | 10 | 10 | 0 |
 | OS threads | 8 | 9 | +1 |
 
-This is one hosted-runner reference point, not an absolute production memory promise.
+### R4 mixed workload baseline
+
+Go Hub CI #82 measured the PR #96 release binary with 2,000 durable events, 1,000 state/health reads, 500 authenticated heartbeats, periodic state uploads, event pagination, a clean restart, and retention convergence:
+
+| Metric | Before | After | Growth |
+| --- | ---: | ---: | ---: |
+| RSS | 16,492 KiB | 22,068 KiB | +5,576 KiB (~5.4 MiB) |
+| file descriptors | 10 | 10 | 0 |
+| OS threads | 8 | 9 | +1 |
+
+After restart the synthetic `max=1000` retention policy converged to `oldestSeq=1001`, `latestSeq=2000`, proving the hard event cap through the real binary lifecycle.
+
+These are hosted-runner reference points, not absolute production memory promises.
+
+## First measured Windows Agent baseline
+
+Go Agent CI #396 measured the Windows release/debug-CI binary on the GitHub-hosted Windows Server 2025 runner after API warm-up and 1,500 local requests cycling `/state`, `/health`, and `/diagnostics`:
+
+| Metric | Before | After | Growth |
+| --- | ---: | ---: | ---: |
+| Working Set | 11.0 MiB | 15.4 MiB | +4.4 MiB |
+| Private Bytes | 47.1 MiB | 51.1 MiB | +4.0 MiB |
+| handles | 144 | 152 | +8 |
+| OS threads | 9 | 10 | +1 |
+| CPU during 2s idle sample | — | 0.000 s | effectively idle |
+
+The handle delta is exactly at the current +8 gross guard. It is therefore a value to watch across future runs before tightening the guard; it is not evidence by itself of a leak because the workload remains bounded and the job completed successfully.
 
 ## R4 hard growth guards
 
