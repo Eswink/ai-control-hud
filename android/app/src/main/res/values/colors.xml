@@ -1,14 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="hud_background">#080B10</color>
-    <color name="hud_surface">#101720</color>
-    <color name="hud_border">#27313D</color>
-    <color name="hud_text_primary">#F1F3F4</color>
-    <color name="hud_text_secondary">#9AA0A6</color>
-    <color name="hud_text_muted">#5F6368</color>
-    <color name="hud_accent">#8AB4F8</color>
-    <color name="hud_success">#81C995</color>
-    <color name="hud_warning">#FDD663</color>
-    <color name="hud_error">#F28B82</color>
-    <color name="hud_progress_muted">#5F6368</color>
+    <color name="hud_background">#07111B</color>
+    <color name="hud_surface">#0D2131</color>
+    <color name="hud_surface_secondary">#102A3D</color>
+    <color name="hud_border">#173D55</color>
+    <color name="hud_text_primary">#F4F8FC</color>
+    <color name="hud_text_secondary">#A9B8C7</color>
+    <color name="hud_text_muted">#71869A</color>
+    <color name="hud_accent">#27B9FF</color>
+    <color name="hud_teal">#22E0CF</color>
+    <color name="hud_success">#2EE6A6</color>
+    <color name="hud_warning">#F6C453</color>
+    <color name="hud_error">#FF6B72</color>
+    <color name="hud_progress_muted">#29465B</color>
+    <color name="hud_button_text">#03131F</color>
 </resources>
