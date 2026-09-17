@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <dimen name="hud_screen_padding">18dp</dimen>
+    <dimen name="hud_screen_padding">16dp</dimen>
+    <dimen name="hud_card_radius">16dp</dimen>
+    <dimen name="hud_card_padding">16dp</dimen>
+    <dimen name="hud_card_gap">12dp</dimen>
     <dimen name="hud_divider_height">1dp</dimen>
     <dimen name="hud_progress_height">8dp</dimen>
+    <dimen name="hud_touch_min">48dp</dimen>
 
     <dimen name="hud_space_2">2dp</dimen>
     <dimen name="hud_space_3">3dp</dimen>
@@ -23,9 +27,12 @@
     <dimen name="hud_text_12">12sp</dimen>
     <dimen name="hud_text_13">13sp</dimen>
     <dimen name="hud_text_14">14sp</dimen>
+    <dimen name="hud_text_16">16sp</dimen>
     <dimen name="hud_text_17">17sp</dimen>
+    <dimen name="hud_text_18">18sp</dimen>
     <dimen name="hud_text_20">20sp</dimen>
     <dimen name="hud_text_22">22sp</dimen>
     <dimen name="hud_text_24">24sp</dimen>
     <dimen name="hud_text_28">28sp</dimen>
+    <dimen name="hud_text_32">32sp</dimen>
 </resources>
