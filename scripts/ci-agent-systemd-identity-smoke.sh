@@ -173,16 +173,23 @@ EOF
 sudo install -m 0644 "$hub_unit_tmp" "$LEGACY_UNIT"
 sudo systemctl daemon-reload
 sudo systemctl enable "$LEGACY_SERVICE"
+if sudo systemctl start "$LEGACY_SERVICE"; then
+  echo "synthetic Hub fixture unexpectedly started" >&2
+  exit 1
+fi
+sudo systemctl is-failed --quiet "$LEGACY_SERVICE"
 hub_unit_hash="$(hash_root_file "$LEGACY_UNIT")"
 HOME="$HOME_ROOT" bash "$ADAPTER" install --agent "$AGENT" --config "$config"
 sudo test -f "$NEW_UNIT"
 [[ "$(hash_root_file "$LEGACY_UNIT")" == "$hub_unit_hash" ]] || { echo "Hub unit changed during Agent install" >&2; exit 1; }
 [[ "$(systemctl is-enabled "$LEGACY_SERVICE" 2>/dev/null || true)" == "enabled" ]] || { echo "Hub unit enable state changed during Agent install" >&2; exit 1; }
+sudo systemctl is-failed --quiet "$LEGACY_SERVICE" || { echo "Hub unit failed state was reset during Agent install" >&2; exit 1; }
 sudo "$AGENT" hub remove --config "$config" >/dev/null
 bash "$ADAPTER" remove --config "$config" --purge
 CURRENT_CONFIG=""
 [[ "$(hash_root_file "$LEGACY_UNIT")" == "$hub_unit_hash" ]] || { echo "Hub unit changed during Agent remove" >&2; exit 1; }
 [[ "$(systemctl is-enabled "$LEGACY_SERVICE" 2>/dev/null || true)" == "enabled" ]] || { echo "Hub unit enable state changed during Agent remove" >&2; exit 1; }
+sudo systemctl is-failed --quiet "$LEGACY_SERVICE" || { echo "Hub unit failed state was reset during Agent remove" >&2; exit 1; }
 remove_fixture_legacy_unit
 
 echo "[h29-ci] inactive historical Agent migrates and stays inactive"
