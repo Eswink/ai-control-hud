@@ -95,7 +95,7 @@ assert_no_upgrade_scratch() {
 assert_service_inactive() {
   case "$(uname -s)" in
     Linux)
-      state="$(systemctl is-active ai-control-hud.service 2>/dev/null || true)"
+      state="$(systemctl is-active ai-control-agent.service 2>/dev/null || true)"
       [[ "$state" == "inactive" ]] || { echo "systemd service unexpectedly active after stopped-state upgrade: $state" >&2; exit 1; }
       ;;
     Darwin)
