@@ -93,7 +93,11 @@ func Save(path string, config Config) error {
 		return err
 	}
 	if sourceaccess.Supported() {
-		if err := sourceaccess.EnsureServiceReadable(config.ZCodeRuntimeDB, config.ZCodeTaskIndexDB); err != nil {
+		if err := sourceaccess.EnsureServiceReadable(
+			config.ZCodeRuntimeDB,
+			config.ZCodeTaskIndexDB,
+			zcodeLogDir(config.ZCodeRuntimeDB),
+		); err != nil {
 			return fmt.Errorf("prepare ZCode service access: %w", err)
 		}
 	}
@@ -194,4 +198,20 @@ func cleanAbsolute(value string) string {
 		return filepath.Clean(value)
 	}
 	return filepath.Clean(absolute)
+}
+
+// zcodeLogDir mirrors the collector's runtime-db convention without extending
+// machine-config schema v1. The service installer grants read/traverse access
+// to this sibling directory when it already exists, allowing LocalSystem to
+// consume ZCode's bounded turn-lifecycle log tail.
+func zcodeLogDir(runtimeDB string) string {
+	runtimeDB = strings.TrimSpace(runtimeDB)
+	if runtimeDB == "" {
+		return ""
+	}
+	parent := filepath.Dir(filepath.Clean(runtimeDB))
+	if !strings.EqualFold(filepath.Base(parent), "db") {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(parent), "log")
 }
