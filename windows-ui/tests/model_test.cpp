@@ -38,5 +38,26 @@ int main() {
     DashboardSnapshot empty;
     if (CurrentTask(empty) != nullptr) return 5;
     if (CreditRemainingPercent(empty).has_value()) return 6;
+
+    DashboardSnapshot left;
+    left.connection = ConnectionState::Live;
+    left.plan = L"pro";
+    left.creditRemaining = 42.0;
+    left.tasks = {TaskView{L"task", L"repo", L"running", L"build", 5}};
+    left.uptimeSeconds = 100;
+
+    DashboardSnapshot right = left;
+    right.uptimeSeconds = 102;
+    right.tasks.front().durationSeconds = 7;
+    if (!DisplayEquivalent(left, right)) return 7;
+
+    right.tasks.front().status = L"completed";
+    if (DisplayEquivalent(left, right)) return 8;
+    right = left;
+    right.creditRemaining = 41.0;
+    if (DisplayEquivalent(left, right)) return 9;
+    right = left;
+    right.outbox.pendingEvents = 1;
+    if (DisplayEquivalent(left, right)) return 10;
     return 0;
 }
