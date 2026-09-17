@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static architecture and privilege-boundary gate for the native Windows Agent UI."""
+"""Static architecture, privilege-boundary and low-refresh gates for the native Windows Agent UI."""
 from __future__ import annotations
 
 import sys
@@ -67,6 +67,41 @@ def check_privileged_boundary() -> None:
             fail(f"privileged UI is missing explicit confirmation token {token!r}")
 
 
+def check_mini_hud_contract() -> None:
+    state_path = SRC / "window_state.cpp"
+    if not state_path.exists():
+        return
+
+    app = text(SRC / "app.cpp")
+    model = text(SRC / "model.h")
+    state = text(state_path)
+    required_app = (
+        "kTrayMiniHud",
+        "HWND_TOPMOST",
+        "ToggleMiniHud",
+        "LoadWindowState",
+        "SaveWindowState",
+        "SPI_GETHIGHCONTRAST",
+        "DisplayEquivalent(snapshot_, next)",
+        "if (repaint && window_ != nullptr) PostMessageW",
+    )
+    for token in required_app:
+        if token not in app:
+            fail(f"Mini HUD/low-refresh contract is missing {token!r}")
+
+    for token in ("uptimeSeconds", "durationSeconds", "return true"):
+        if token not in model:
+            fail(f"semantic repaint comparator is missing {token!r}")
+
+    for token in ("LOCALAPPDATA", "native-ui-state.txt", "create_directories", "std::filesystem::rename"):
+        if token not in state:
+            fail(f"window persistence contract is missing {token!r}")
+
+    for token in ("SetTimer(", "CreateTimerQueueTimer(", "DwmFlush("):
+        if token in app:
+            fail(f"fixed-rate render/animation primitive is forbidden: {token}")
+
+
 def main() -> int:
     cmake = text(UI / "CMakeLists.txt")
     joined = cmake + "\n" + "\n".join(
@@ -104,7 +139,11 @@ def main() -> int:
         fail("Simplified Chinese localization catalog is missing")
 
     check_privileged_boundary()
-    print("[windows-native-ui] PASS native=C++20/Win32+D2D+DWrite transport=WinHTTP bounded=yes uac=allowlisted-delegation")
+    check_mini_hud_contract()
+    print(
+        "[windows-native-ui] PASS native=C++20/Win32+D2D+DWrite transport=WinHTTP "
+        "bounded=yes uac=allowlisted-delegation repaint=semantic mini-hud=persistent"
+    )
     return 0
 
 
