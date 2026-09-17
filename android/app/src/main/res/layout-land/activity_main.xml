@@ -371,6 +371,16 @@
                     android:textColor="@color/hud_success"
                     android:textSize="@dimen/hud_text_12" />
 
+                <dev.eswink.aicontrolhud.DeskDisplaySwitch
+                    android:id="@+id/deskDisplaySwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="@dimen/hud_touch_min"
+                    android:layout_marginStart="@dimen/hud_space_12"
+                    android:maxLines="1"
+                    android:text="@string/desk_display_keep_awake"
+                    android:textColor="@color/hud_text_primary"
+                    android:textSize="@dimen/hud_text_12" />
+
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="0dp"
