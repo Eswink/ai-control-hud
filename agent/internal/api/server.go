@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -15,11 +16,14 @@ const (
 	commandCodeAdapterKind = "commandcode.provider-http"
 )
 
+type OutboxDiagnosticsProvider func(context.Context, time.Time) domain.OutboxDiagnostics
+
 type Server struct {
-	store   *store.SnapshotStore
-	version string
-	started time.Time
-	now     func() time.Time
+	store             *store.SnapshotStore
+	version           string
+	started           time.Time
+	now               func() time.Time
+	outboxDiagnostics OutboxDiagnosticsProvider
 }
 
 func New(store *store.SnapshotStore, version string, started time.Time) *Server {
@@ -29,6 +33,13 @@ func New(store *store.SnapshotStore, version string, started time.Time) *Server 
 		started: started,
 		now:     time.Now,
 	}
+}
+
+// SetOutboxDiagnosticsProvider wires optional local operational metadata. It is
+// configured before the HTTP server begins serving requests; callers should not
+// mutate the provider after Handler traffic starts.
+func (s *Server) SetOutboxDiagnosticsProvider(provider OutboxDiagnosticsProvider) {
+	s.outboxDiagnostics = provider
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,7 +74,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (s *Server) handleDiagnostics(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	now := s.now().UTC()
 	state := s.store.Get()
 	payload := domain.DiagnosticsResponse{
@@ -77,6 +88,10 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, _ *http.Request) {
 			ZCode:       sourceDiagnostics(now, zcodeAdapterKind, state.ZCode.Health),
 			CommandCode: sourceDiagnostics(now, commandCodeAdapterKind, state.CommandCode.Health),
 		},
+	}
+	if s.outboxDiagnostics != nil {
+		outbox := s.outboxDiagnostics(r.Context(), now)
+		payload.Outbox = &outbox
 	}
 	writeJSON(w, http.StatusOK, payload)
 }

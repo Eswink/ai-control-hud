@@ -159,6 +159,9 @@ func serve(
 		}
 		return fmt.Errorf("configure remote hub: %w", err)
 	}
+	if remoteLoop != nil {
+		apiServer.SetOutboxDiagnosticsProvider(remoteLoop.OutboxDiagnostics)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
