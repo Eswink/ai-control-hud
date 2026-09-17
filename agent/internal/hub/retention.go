@@ -42,10 +42,11 @@ func (p RetentionPolicy) Validate() error {
 }
 
 func RetentionPolicyFromConfig(config Config) RetentionPolicy {
+	days, minimum, maximum, _ := config.effectiveRetention()
 	return RetentionPolicy{
-		MaxAge:    time.Duration(config.EventRetentionDays) * 24 * time.Hour,
-		MinEvents: config.EventRetentionMin,
-		MaxEvents: config.EventRetentionMax,
+		MaxAge:    time.Duration(days) * 24 * time.Hour,
+		MinEvents: minimum,
+		MaxEvents: maximum,
 		BatchSize: DefaultRetentionBatchSize,
 	}
 }
