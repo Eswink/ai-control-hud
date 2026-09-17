@@ -1,3 +1,4 @@
+#include "layout.h"
 #include "model.h"
 
 #include <cmath>
@@ -21,6 +22,17 @@ int main() {
     };
     const TaskView* current = CurrentTask(snapshot);
     if (current == nullptr || current->title != L"run") return 1;
+
+    DashboardSnapshot terminalOnly;
+    terminalOnly.tasks = {
+        TaskView{L"done", L"repo", L"completed", L"", 10},
+        TaskView{L"failed", L"repo", L"failed", L"", 20},
+    };
+    if (CurrentTask(terminalOnly) != nullptr) return 11;
+
+    DashboardSnapshot executing;
+    executing.tasks = {TaskView{L"execute", L"repo", L"executing", L"", 4}};
+    if (CurrentTask(executing) == nullptr) return 12;
 
     snapshot.creditRemaining = 25.0;
     snapshot.creditLimit = 100.0;
@@ -59,5 +71,14 @@ int main() {
     right = left;
     right.outbox.pendingEvents = 1;
     if (DisplayEquivalent(left, right)) return 10;
+
+    if (!UseStackedDashboard(662.0f)) return 13;
+    if (UseStackedDashboard(1018.0f)) return 14;
+    if (!Close(StackedTaskCardHeight(500.0f), 230.0f)) return 15;
+    if (!Close(StackedTaskCardHeight(300.0f), 200.0f)) return 16;
+    if (CommandUsageRowCount(280.0f) != 2 || CommandUsageRowCount(220.0f) != 1 ||
+        CommandUsageRowCount(170.0f) != 0) {
+        return 17;
+    }
     return 0;
 }
