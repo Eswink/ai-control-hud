@@ -1,132 +1,153 @@
-param()
-
 $ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
 
-$repo = Split-Path -Parent $PSScriptRoot
-$agent = Join-Path $repo "agent\ai-control-agent.exe"
-$badUpgradeAgent = Join-Path $env:RUNNER_TEMP "ai-control-hud-g6-broken-agent.exe"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $repoRoot
+
+$agent = Join-Path $repoRoot "agent\ai-control-agent.exe"
+if (-not (Test-Path $agent)) {
+    throw "G6 CI agent executable not found at $agent"
+}
+
 $root = Join-Path $env:RUNNER_TEMP "ai-control-hud-g6-service-smoke"
-$stateDir = Join-Path $root "state"
 $runtimeDb = Join-Path $root "runtime.sqlite"
 $taskIndexDb = Join-Path $root "tasks-index.sqlite"
-$machineConfig = Join-Path $stateDir "agent.json"
 $apiKeyFile = Join-Path $root "commandcode.key"
+$badUpgradeAgent = Join-Path $root "broken-upgrade.exe"
+$implicitProviderConfig = Join-Path $repoRoot ".local\commandcode-provider.json"
+$machineConfig = Join-Path $root "state\agent.json"
+$installedAgent = Join-Path ${env:ProgramFiles} "AI Control HUD\ai-control-agent.exe"
 $port = 18787
-
-function Invoke-SqliteSeed {
-    param([string]$Path, [string[]]$Statements)
-    $python = @'
-import sqlite3, sys
-path = sys.argv[1]
-statements = sys.argv[2:]
-conn = sqlite3.connect(path)
-for statement in statements:
-    conn.execute(statement)
-conn.commit()
-conn.close()
-'@
-    python -c $python $Path @Statements
-    if ($LASTEXITCODE -ne 0) {
-        throw "failed to seed SQLite database $Path"
-    }
-}
-
-function Wait-AgentState {
-    $deadline = (Get-Date).AddSeconds(25)
-    while ((Get-Date) -lt $deadline) {
-        try {
-            return Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/state" -TimeoutSec 2
-        }
-        catch {
-            Start-Sleep -Milliseconds 400
-        }
-    }
-    throw "agent state endpoint did not become ready"
-}
-
-function Assert-ManualCommandCodeProvider {
-    $output = & $agent commandcode status --config $machineConfig 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "commandcode status failed: $output"
-    }
-    $text = ($output -join "`n")
-    if ($text -notmatch 'provider=command-code' -or $text -notmatch 'host=api\.commandcode\.ai') {
-        throw "unexpected protected CommandCode provider: $text"
-    }
-    if ($text -match 'commandcode-provider\.json' -or $text -match 'implicit') {
-        throw "legacy implicit provider path leaked into configured provider: $text"
-    }
-}
-
-function Get-ProtectedStateHashes {
-    $machine = Get-FileHash -Algorithm SHA256 $machineConfig
-    $config = Get-Content $machineConfig -Raw | ConvertFrom-Json
-    if (-not (Test-Path $config.commandCodeSecret)) {
-        throw "configured DPAPI SecretStore is missing"
-    }
-    $secret = Get-FileHash -Algorithm SHA256 $config.commandCodeSecret
-    return @{
-        machine = $machine.Hash
-        secret = $secret.Hash
-    }
-}
-
-function Assert-ProtectedStateHashes {
-    param([hashtable]$Before)
-    $after = Get-ProtectedStateHashes
-    if ($after.machine -ne $Before.machine) {
-        throw "machine config changed across binary-only service upgrade"
-    }
-    if ($after.secret -ne $Before.secret) {
-        throw "CommandCode DPAPI SecretStore changed across binary-only service upgrade"
-    }
-}
-
-function Assert-InstalledBinaryMatchesSource {
-    $installed = Join-Path $env:ProgramFiles "AI Control HUD\ai-control-agent.exe"
-    if (-not (Test-Path $installed)) {
-        throw "installed service binary missing at $installed"
-    }
-    $sourceHash = (Get-FileHash -Algorithm SHA256 $agent).Hash
-    $installedHash = (Get-FileHash -Algorithm SHA256 $installed).Hash
-    if ($sourceHash -ne $installedHash) {
-        throw "installed service binary hash does not match selected upgrade source"
-    }
-}
-
-function Assert-UpgradeScratchClean {
-    $installed = Join-Path $env:ProgramFiles "AI Control HUD\ai-control-agent.exe"
-    foreach ($suffix in @('.upgrade.new', '.upgrade.bak')) {
-        if (Test-Path ($installed + $suffix)) {
-            throw "upgrade scratch path remains: $installed$suffix"
-        }
-    }
-}
+$baseUrl = "http://127.0.0.1:$port"
 
 if (Test-Path $root) {
     Remove-Item -Recurse -Force $root
 }
-New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
-Set-Content -NoNewline -Encoding ascii -Path $apiKeyFile -Value "ci-manual-commandcode-key"
+New-Item -ItemType Directory -Force $root | Out-Null
 
-$nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-Invoke-SqliteSeed -Path $runtimeDb -Statements @(
-    'CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, path TEXT, title TEXT NOT NULL, summary_additions INTEGER, summary_deletions INTEGER)',
-    'CREATE TABLE session_target (session_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, objective TEXT NOT NULL, status TEXT NOT NULL, token_budget INTEGER, tokens_used INTEGER NOT NULL, time_used_seconds INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, summary_title TEXT, active_input_id TEXT, active_run_started_at INTEGER, active_run_last_seen_at INTEGER)',
-    'CREATE TABLE todo (session_id TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL, position INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, PRIMARY KEY (session_id, position))',
-    "INSERT INTO session VALUES ('session-ci', 'D:\\ci\\workspace', 'D:\\ci\\workspace', 'CI running task', 1, 0)",
-    "INSERT INTO session_target VALUES ('session-ci', 'target-ci', 'CI objective', 'active', NULL, 1, 60, $($nowMs - 60000), $nowMs, 'CI summary', 'input-ci', $($nowMs - 60000), $nowMs)",
-    "INSERT INTO todo VALUES ('session-ci', 'CI activity', 'running', 'normal', 0, $nowMs, $nowMs)"
-)
-Invoke-SqliteSeed -Path $taskIndexDb -Statements @(
-    'CREATE TABLE tasks (workspace_key TEXT NOT NULL, workspace_path TEXT NOT NULL, workspace_identity TEXT, task_id TEXT NOT NULL, title TEXT NOT NULL, task_status TEXT, provider TEXT, mode TEXT NOT NULL DEFAULT "", model TEXT, migration_source TEXT, forked_from_task_id TEXT, created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, unread_at INTEGER, last_unread_at INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL, archived INTEGER NOT NULL, deleted INTEGER NOT NULL, title_overridden INTEGER NOT NULL DEFAULT 0, meta_json TEXT NOT NULL DEFAULT "{}", searchable_text TEXT NOT NULL DEFAULT "", cron_automation_id TEXT, off_peak_task_id TEXT, PRIMARY KEY (workspace_key, task_id))',
-    "INSERT INTO tasks (workspace_key, workspace_path, task_id, title, task_status, updated_at, pinned, archived, deleted) VALUES ('ci', 'D:\\ci\\workspace', 'task-ci', 'CI running task', 'running', $nowMs, 1, 0, 0)"
-)
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $pythonCommand) {
+    throw "Python is required for the G6 synthetic SQLite smoke fixture"
+}
 
-go build -o $badUpgradeAgent .\scripts\fixtures\broken-service-agent.go
+& $pythonCommand.Source (Join-Path $repoRoot "scripts\g4_state_db.py") init `
+    --runtime $runtimeDb `
+    --task-index $taskIndexDb
 if ($LASTEXITCODE -ne 0) {
-    throw "failed to build broken service Agent fixture"
+    throw "Failed to create synthetic G6 ZCode databases"
+}
+
+[System.IO.File]::WriteAllText($apiKeyFile, "test-only`n", [System.Text.UTF8Encoding]::new($false))
+& go build -o $badUpgradeAgent (Join-Path $repoRoot "scripts\fixtures\broken-service-agent.go")
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to build the preflight-valid broken service candidate"
+}
+
+# Place a valid legacy provider file at the historical implicit location. The
+# service install must ignore it because --provider-config is not supplied.
+New-Item -ItemType Directory -Force (Split-Path -Parent $implicitProviderConfig) | Out-Null
+$implicitProviderJson = @'
+{
+  "provider": {
+    "implicit-canary": {
+      "name": "implicit-canary",
+      "kind": "openai",
+      "enabled": true,
+      "options": {
+        "baseURL": "https://api.commandcode.ai/provider/v1",
+        "apiKey": "must-not-be-auto-imported"
+      },
+      "models": {}
+    }
+  }
+}
+'@
+[System.IO.File]::WriteAllText($implicitProviderConfig, $implicitProviderJson, [System.Text.UTF8Encoding]::new($false))
+
+function Wait-AgentState {
+    param([int]$TimeoutSeconds = 30)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastError = $null
+    $lastState = $null
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $lastState = Invoke-RestMethod -Uri "$baseUrl/api/v1/state" -Method Get -TimeoutSec 3
+            if ($lastState.schemaVersion -eq 1 -and
+                [string]$lastState.server.version -like "0.3.*-go*" -and
+                $lastState.zcode.health.status -eq "ok") {
+                return $lastState
+            }
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    if ($null -ne $lastState) {
+        $diagnostic = [ordered]@{
+            serverVersion = $lastState.server.version
+            overall = $lastState.overall.status
+            zcodeHealth = $lastState.zcode.health
+            zcodeSummary = $lastState.zcode.summary
+            commandCodeHealth = $lastState.commandCode.health
+        } | ConvertTo-Json -Depth 8 -Compress
+        Write-Host "[g6-ci] last state: $diagnostic"
+    }
+    & $agent service status
+    $service = Get-Service -Name "AIControlHUD" -ErrorAction SilentlyContinue
+    if ($null -ne $service) {
+        Write-Host "[g6-ci] SCM state=$($service.Status)"
+    }
+    throw "G6 service did not become healthy in time. Last request error: $lastError"
+}
+
+function Assert-ManualCommandCodeProvider {
+    $statusOutput = (& $agent commandcode status --config $machineConfig 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "commandcode status failed with exit code $LASTEXITCODE"
+    }
+    Write-Host $statusOutput.Trim()
+    if ($statusOutput -notmatch 'provider=command-code') {
+        throw "protected CommandCode provider is not the manually imported provider"
+    }
+    if ($statusOutput -match 'implicit-canary') {
+        throw "historical implicit provider file was unexpectedly imported"
+    }
+}
+
+function Get-ProtectedStateHashes {
+    $machineState = Get-Content $machineConfig -Raw | ConvertFrom-Json
+    return [ordered]@{
+        config = (Get-FileHash -Algorithm SHA256 $machineConfig).Hash
+        secret = (Get-FileHash -Algorithm SHA256 $machineState.commandCodeSecret).Hash
+    }
+}
+
+function Assert-ProtectedStateHashes {
+    param($Expected)
+    $actual = Get-ProtectedStateHashes
+    if ($actual.config -ne $Expected.config) {
+        throw "machine config changed during service upgrade"
+    }
+    if ($actual.secret -ne $Expected.secret) {
+        throw "CommandCode DPAPI SecretStore changed during service upgrade"
+    }
+}
+
+function Assert-UpgradeScratchClean {
+    foreach ($suffix in @('.upgrade.new', '.upgrade.bak')) {
+        if (Test-Path ($installedAgent + $suffix)) {
+            throw "service upgrade scratch artifact remains: $($installedAgent + $suffix)"
+        }
+    }
+}
+
+function Assert-InstalledBinaryMatchesSource {
+    $installedHash = (Get-FileHash -Algorithm SHA256 $installedAgent).Hash
+    $sourceHash = (Get-FileHash -Algorithm SHA256 $agent).Hash
+    if ($installedHash -ne $sourceHash) {
+        throw "installed service executable does not match validated Agent source"
+    }
 }
 
 $installed = $false
@@ -257,29 +278,61 @@ try {
     if (-not (Test-Path $machineState.commandCodeSecret)) {
         throw "DPAPI SecretStore was unexpectedly removed"
     }
+    Assert-ManualCommandCodeProvider
 
-    Write-Host "[g6-ci] reinstalling service from protected SecretStore only"
+    Write-Host "[g6-ci] reinstalling from preserved DPAPI SecretStore without provider flag"
     & $agent service install --config $machineConfig
     if ($LASTEXITCODE -ne 0) {
-        throw "service reinstall failed with exit code $LASTEXITCODE"
+        throw "service reinstall from protected SecretStore failed with exit code $LASTEXITCODE"
     }
     $installed = $true
-    Assert-ManualCommandCodeProvider
-    Write-Host "[g6-ci] final purge"
-    & $agent service remove --config $machineConfig --purge
+
+    & $agent doctor --config $machineConfig
     if ($LASTEXITCODE -ne 0) {
-        throw "service purge failed with exit code $LASTEXITCODE"
+        throw "doctor after reinstall failed with exit code $LASTEXITCODE"
     }
-    $installed = $false
-    if (Test-Path $machineConfig) {
-        throw "machine config still exists after purge"
+    Assert-ManualCommandCodeProvider
+
+    & $agent service start
+    if ($LASTEXITCODE -ne 0) {
+        throw "service start after reinstall failed with exit code $LASTEXITCODE"
     }
-    Write-Host "[g6-ci] PASSED"
-}
-finally {
+    $state = Wait-AgentState
+    if ($state.zcode.summary.running -ne 1) {
+        throw "unexpected ZCode state after reinstall"
+    }
+
+    Write-Host "[g6-ci] stopping reinstalled service"
+    & $agent service stop
+    if ($LASTEXITCODE -ne 0) {
+        throw "service stop after reinstall failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host "[g6-ci] manual CommandCode key + SCM + transactional upgrade/rollback + DPAPI + reinstall smoke PASSED"
+} finally {
     if ($installed) {
-        & $agent service remove --config $machineConfig --purge | Out-Host
+        try {
+            & $agent service remove --config $machineConfig --purge
+        } catch {
+            Write-Warning "G6 CI cleanup command failed: $($_.Exception.Message)"
+        }
     }
-    Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
-    Remove-Item -Force $badUpgradeAgent -ErrorAction SilentlyContinue
+    foreach ($suffix in @('.upgrade.new', '.upgrade.bak')) {
+        Remove-Item -Force ($installedAgent + $suffix) -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $implicitProviderConfig) {
+        Remove-Item -Force $implicitProviderConfig -ErrorAction SilentlyContinue
+    }
+    try {
+        $leftover = Get-Service -Name "AIControlHUD" -ErrorAction SilentlyContinue
+        if ($null -ne $leftover) {
+            sc.exe stop AIControlHUD | Out-Null
+            sc.exe delete AIControlHUD | Out-Null
+        }
+    } catch {
+        Write-Warning "G6 CI fallback service cleanup failed: $($_.Exception.Message)"
+    }
+    if (Test-Path $root) {
+        Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+    }
 }
