@@ -126,7 +126,7 @@ inline void AddConcurrentTaskPreview(DashboardSnapshot& snapshot) {
         peers += L"\n";
         peers += current->activity;
     }
-    current->activity = std::move(peers);
+    current->activity = peers;
 }
 
 inline std::optional<double> CreditRemainingPercent(const DashboardSnapshot& snapshot) noexcept {
