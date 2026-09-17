@@ -1,0 +1,86 @@
+name: Release Tag Request
+
+on:
+  push:
+    branches:
+      - 'release/**'
+    paths:
+      - '.release-request'
+
+concurrency:
+  group: release-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release request
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate request and create immutable release tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROD_KEYSTORE_BASE64: ${{ secrets.HUD_ANDROID_KEYSTORE_BASE64 }}
+          PROD_STORE_PASSWORD: ${{ secrets.HUD_ANDROID_KEYSTORE_PASSWORD }}
+          PROD_KEY_ALIAS: ${{ secrets.HUD_ANDROID_KEY_ALIAS }}
+          PROD_KEY_PASSWORD: ${{ secrets.HUD_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -f .release-request
+          version="$(sed -n 's/^version=//p' .release-request)"
+          target="$(sed -n 's/^commit=//p' .release-request)"
+          requested="${GITHUB_REF_NAME#release/v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid requested version: $version" >&2
+            exit 1
+          fi
+          if [[ "$requested" != "$version" ]]; then
+            echo "release branch/version mismatch: branch=$requested file=$version" >&2
+            exit 1
+          fi
+          if [[ ! "$target" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid target commit: $target" >&2
+            exit 1
+          fi
+
+          if [[ "$version" != *-* ]]; then
+            for value in "$PROD_KEYSTORE_BASE64" "$PROD_STORE_PASSWORD" "$PROD_KEY_ALIAS" "$PROD_KEY_PASSWORD"; do
+              if [[ -z "$value" ]]; then
+                echo 'stable release request rejected: production Android signing secrets are incomplete' >&2
+                exit 1
+              fi
+            done
+          fi
+
+          git fetch origin main --tags --force
+          main_sha="$(git rev-parse origin/main)"
+          if [[ "$target" != "$main_sha" ]]; then
+            echo "release request target is not current main: target=$target main=$main_sha" >&2
+            exit 1
+          fi
+          git cat-file -e "$target^{commit}"
+
+          tag="v$version"
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            existing="$(git rev-list -n 1 "$tag")"
+            if [[ "$existing" != "$target" ]]; then
+              echo "tag $tag already exists at $existing, expected $target" >&2
+              exit 1
+            fi
+            echo "tag $tag already exists at the requested commit"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$tag" "$target" -m "AI Control HUD $version"
+          git push origin "refs/tags/$tag"
+          echo "created $tag at $target"

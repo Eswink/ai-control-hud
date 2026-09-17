@@ -1,9 +1,6 @@
 name: Android Release
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version_name:
@@ -48,11 +45,7 @@ jobs:
           MANUAL_VERSION_NAME: ${{ inputs.version_name }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
-            version_name="$MANUAL_VERSION_NAME"
-          else
-            version_name="${GITHUB_REF_NAME#v}"
-          fi
+          version_name="$MANUAL_VERSION_NAME"
           if ! [[ "$version_name" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,99}$ ]]; then
             echo 'release versionName contains unsupported characters or length' >&2
             exit 1
