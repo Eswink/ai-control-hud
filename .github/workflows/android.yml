@@ -7,6 +7,7 @@ on:
       - 'server/tests/fixtures/**'
       - 'docs/HUB_V2_PLAN.md'
       - 'scripts/ci-android-apk-secret-scan.py'
+      - 'scripts/ci-android-ui-resources.py'
       - '.github/workflows/android.yml'
       - '.github/workflows/android-release.yml'
   pull_request:
@@ -15,6 +16,7 @@ on:
       - 'server/tests/fixtures/**'
       - 'docs/HUB_V2_PLAN.md'
       - 'scripts/ci-android-apk-secret-scan.py'
+      - 'scripts/ci-android-ui-resources.py'
       - '.github/workflows/android.yml'
       - '.github/workflows/android-release.yml'
   workflow_dispatch:
@@ -48,6 +50,9 @@ jobs:
         with:
           gradle-version: '8.11.1'
           cache-provider: basic
+
+      - name: Enforce localized low-resource UI foundation
+        run: python3 scripts/ci-android-ui-resources.py
 
       - name: Verify APK secret scanner rejects a synthetic leak
         shell: bash
