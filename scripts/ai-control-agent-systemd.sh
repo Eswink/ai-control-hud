@@ -298,7 +298,9 @@ EOF
     sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
     sudo rm -f "$UNIT_PATH"
 
+    legacy_removed=0
     if legacy_agent_unit_present; then
+      legacy_removed=1
       sudo systemctl stop "$LEGACY_SERVICE_NAME" 2>/dev/null || true
       sudo systemctl disable "$LEGACY_SERVICE_NAME" 2>/dev/null || true
       sudo rm -f "$LEGACY_UNIT_PATH"
@@ -306,7 +308,9 @@ EOF
 
     sudo systemctl daemon-reload
     sudo systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
-    sudo systemctl reset-failed "$LEGACY_SERVICE_NAME" 2>/dev/null || true
+    if [[ "$legacy_removed" -eq 1 ]]; then
+      sudo systemctl reset-failed "$LEGACY_SERVICE_NAME" 2>/dev/null || true
+    fi
     if [[ "$PURGE" -eq 1 ]]; then
       [[ -z "$secret_path" ]] || sudo rm -f "$secret_path"
       sudo rm -f "$CONFIG_PATH"
