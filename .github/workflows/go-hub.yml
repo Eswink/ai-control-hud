@@ -23,6 +23,7 @@ on:
       - 'scripts/ci-hub-upgrade-smoke.sh'
       - 'scripts/ci-hub-runtime-smoke.py'
       - 'scripts/ci-hub-resource-smoke.py'
+      - 'scripts/ci-hub-mixed-soak.py'
       - 'scripts/ci-hub-stats-smoke.py'
       - 'tools/tests/test_hub_runtime_smoke.py'
       - 'tools/tests/test_hub_bundle.py'
@@ -61,6 +62,7 @@ on:
       - 'scripts/ci-hub-upgrade-smoke.sh'
       - 'scripts/ci-hub-runtime-smoke.py'
       - 'scripts/ci-hub-resource-smoke.py'
+      - 'scripts/ci-hub-mixed-soak.py'
       - 'scripts/ci-hub-stats-smoke.py'
       - 'tools/tests/test_hub_runtime_smoke.py'
       - 'tools/tests/test_hub_bundle.py'
@@ -149,6 +151,9 @@ jobs:
 
       - name: Go Hub resource growth smoke
         run: python3 scripts/ci-hub-resource-smoke.py --hub dist/ai-control-hub --requests 1000
+
+      - name: Go Hub mixed workload resource soak
+        run: python3 scripts/ci-hub-mixed-soak.py --hub dist/ai-control-hub --events 2000 --reads 1000 --heartbeats 500
 
       - name: Go Hub stats CLI smoke
         run: python3 scripts/ci-hub-stats-smoke.py --hub dist/ai-control-hub
