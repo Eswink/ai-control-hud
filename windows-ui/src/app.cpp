@@ -2,6 +2,7 @@
 
 #include "agent_client.h"
 #include "health_probe.h"
+#include "layout.h"
 #include "privileged_actions.h"
 #include "window_state.h"
 
@@ -14,6 +15,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace aicontrol::ui {
 namespace {
@@ -23,7 +25,7 @@ constexpr UINT kTrayId = 1;
 constexpr float kSidebarWidth = 214.0f;
 constexpr float kOuterGap = 24.0f;
 constexpr float kCardGap = 16.0f;
-constexpr float kNavTop = 132.0f;
+constexpr float kNavTop = 146.0f;
 constexpr float kNavHeight = 40.0f;
 constexpr float kNavGap = 8.0f;
 constexpr int kMiniWidth = 600;
@@ -95,6 +97,24 @@ std::wstring SourceText(const Localization& locale, const std::wstring& value) {
     if (value == L"error") return std::wstring(locale.Get(TextId::SourceError));
     if (value == L"disabled") return std::wstring(locale.Get(TextId::SourceDisabled));
     return std::wstring(locale.Get(TextId::Unknown));
+}
+
+std::wstring TaskStatusText(const Localization& locale, const std::wstring& value) {
+    if (value == L"running" || value == L"executing" || value == L"working" || value == L"active" || value == L"in_progress") {
+        return std::wstring(locale.Get(TextId::Running));
+    }
+    if (value == L"waiting" || value == L"queued" || value == L"pending") {
+        return locale.IsSimplifiedChinese() ? L"等待中" : L"Waiting";
+    }
+    return value.empty() ? std::wstring(locale.Get(TextId::Unknown)) : value;
+}
+
+std::wstring CurrentTaskMeta(const Localization& locale, const TaskView& task) {
+    std::wstring meta(locale.Get(TextId::ZCode));
+    meta += L" · " + TaskStatusText(locale, task.status);
+    if (!task.workspace.empty()) meta += L" · " + task.workspace;
+    if (task.durationSeconds) meta += L" · " + DurationText(*task.durationSeconds);
+    return meta;
 }
 
 }  // namespace
@@ -185,6 +205,7 @@ bool App::CreateDeviceIndependentResources() {
     return createFormat(28.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, titleFormat_) &&
            createFormat(17.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, sectionFormat_) &&
            createFormat(31.0f, DWRITE_FONT_WEIGHT_BOLD, heroFormat_) &&
+           createFormat(24.0f, DWRITE_FONT_WEIGHT_BOLD, taskTitleFormat_) &&
            createFormat(14.0f, DWRITE_FONT_WEIGHT_NORMAL, bodyFormat_) &&
            createFormat(12.0f, DWRITE_FONT_WEIGHT_NORMAL, smallFormat_);
 }
@@ -255,12 +276,67 @@ void App::DrawCard(ID2D1RenderTarget* target, const D2D1_RECT_F& rect, ID2D1Brus
     target->DrawRoundedRectangle(rounded, borderBrush_.Get(), 1.0f);
 }
 
+float App::DrawTextFitted(ID2D1RenderTarget* target, std::wstring_view text, IDWriteTextFormat* format,
+                          const D2D1_RECT_F& rect, ID2D1Brush* brush, UINT32 maxLines, bool wrap,
+                          DWRITE_TEXT_ALIGNMENT alignment) {
+    if (text.empty() || format == nullptr || brush == nullptr || dwriteFactory_ == nullptr) return 0.0f;
+
+    const float width = std::max(1.0f, rect.right - rect.left);
+    const float maxHeight = std::max(1.0f, rect.bottom - rect.top);
+    const auto wrapping = wrap ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP;
+
+    Microsoft::WRL::ComPtr<IDWriteTextLayout> measureLayout;
+    if (FAILED(dwriteFactory_->CreateTextLayout(
+            text.data(), static_cast<UINT32>(text.size()), format, width, 4096.0f,
+            measureLayout.GetAddressOf()))) {
+        return 0.0f;
+    }
+    measureLayout->SetWordWrapping(wrapping);
+    measureLayout->SetTextAlignment(alignment);
+
+    float allowedHeight = maxHeight;
+    if (maxLines > 0) {
+        UINT32 lineCount = 0;
+        const HRESULT countResult = measureLayout->GetLineMetrics(nullptr, 0, &lineCount);
+        if ((countResult == E_NOT_SUFFICIENT_BUFFER || SUCCEEDED(countResult)) && lineCount > 0) {
+            std::vector<DWRITE_LINE_METRICS> lines(lineCount);
+            if (SUCCEEDED(measureLayout->GetLineMetrics(lines.data(), lineCount, &lineCount))) {
+                float lineHeight = 0.0f;
+                const UINT32 count = std::min(maxLines, lineCount);
+                for (UINT32 i = 0; i < count; ++i) lineHeight += lines[i].height;
+                if (lineHeight > 0.0f) allowedHeight = std::min(maxHeight, lineHeight);
+            }
+        }
+    }
+
+    Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(dwriteFactory_->CreateTextLayout(
+            text.data(), static_cast<UINT32>(text.size()), format, width, std::max(1.0f, allowedHeight),
+            layout.GetAddressOf()))) {
+        return 0.0f;
+    }
+    layout->SetWordWrapping(wrapping);
+    layout->SetTextAlignment(alignment);
+
+    DWRITE_TRIMMING trimming{};
+    trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+    Microsoft::WRL::ComPtr<IDWriteInlineObject> ellipsis;
+    if (SUCCEEDED(dwriteFactory_->CreateEllipsisTrimmingSign(format, ellipsis.GetAddressOf()))) {
+        layout->SetTrimming(&trimming, ellipsis.Get());
+    }
+
+    DWRITE_TEXT_METRICS metrics{};
+    const float measuredHeight = SUCCEEDED(layout->GetMetrics(&metrics)) ? metrics.height : allowedHeight;
+    target->DrawTextLayout(
+        D2D1::Point2F(rect.left, rect.top), layout.Get(), brush,
+        D2D1_DRAW_TEXT_OPTIONS_CLIP
+    );
+    return std::min(allowedHeight, std::max(0.0f, measuredHeight));
+}
+
 void App::DrawTextBlock(ID2D1RenderTarget* target, std::wstring_view text, IDWriteTextFormat* format,
                         const D2D1_RECT_F& rect, ID2D1Brush* brush, DWRITE_TEXT_ALIGNMENT alignment) {
-    if (text.empty() || format == nullptr || brush == nullptr) return;
-    format->SetTextAlignment(alignment);
-    target->DrawTextW(text.data(), static_cast<UINT32>(text.size()), format, rect, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
-    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    (void)DrawTextFitted(target, text, format, rect, brush, 1, false, alignment);
 }
 
 void App::Draw() {
@@ -305,15 +381,19 @@ void App::Draw() {
                       D2D1::RectF(left + 16, top + 56, mid - 12, top + 78), secondaryBrush_.Get());
         const TaskView* current = CurrentTask(snapshot);
         if (current == nullptr) {
-            DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::NoCurrentTask), bodyFormat_.Get(),
-                          D2D1::RectF(left + 16, top + 84, mid - 12, bottom - 20), primaryBrush_.Get());
+            (void)DrawTextFitted(renderTarget_.Get(), localization_.Get(TextId::NoCurrentTask), bodyFormat_.Get(),
+                                 D2D1::RectF(left + 16, top + 84, mid - 12, bottom - 20), primaryBrush_.Get(), 2, true);
         } else {
-            DrawTextBlock(renderTarget_.Get(), current->title, sectionFormat_.Get(),
-                          D2D1::RectF(left + 16, top + 82, mid - 12, top + 114), primaryBrush_.Get());
-            std::wstring meta = current->status;
-            if (!current->workspace.empty()) meta += L" · " + current->workspace;
+            float y = top + 82.0f;
+            const float titleHeight = DrawTextFitted(
+                renderTarget_.Get(), current->title, sectionFormat_.Get(),
+                D2D1::RectF(left + 16, y, mid - 12, std::min(bottom - 48.0f, y + 48.0f)),
+                primaryBrush_.Get(), 2, true
+            );
+            y += std::max(20.0f, titleHeight) + 6.0f;
+            const std::wstring meta = CurrentTaskMeta(localization_, *current);
             DrawTextBlock(renderTarget_.Get(), meta, smallFormat_.Get(),
-                          D2D1::RectF(left + 16, top + 120, mid - 12, bottom - 18), accentBrush_.Get());
+                          D2D1::RectF(left + 16, y, mid - 12, bottom - 18), accentBrush_.Get());
         }
 
         DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::CommandCode), smallFormat_.Get(),
@@ -337,10 +417,10 @@ void App::Draw() {
     }
 
     renderTarget_->FillRectangle(D2D1::RectF(0, 0, kSidebarWidth, size.height), sidebarBrush_.Get());
-    DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::AppTitle), sectionFormat_.Get(),
-                  D2D1::RectF(22, 26, kSidebarWidth - 18, 62), primaryBrush_.Get());
-    DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::AppSubtitle), smallFormat_.Get(),
-                  D2D1::RectF(22, 66, kSidebarWidth - 18, 114), secondaryBrush_.Get());
+    (void)DrawTextFitted(renderTarget_.Get(), localization_.Get(TextId::AppTitle), sectionFormat_.Get(),
+                         D2D1::RectF(22, 22, kSidebarWidth - 18, 70), primaryBrush_.Get(), 2, true);
+    (void)DrawTextFitted(renderTarget_.Get(), localization_.Get(TextId::AppSubtitle), smallFormat_.Get(),
+                         D2D1::RectF(22, 76, kSidebarWidth - 18, 132), secondaryBrush_.Get(), 3, true);
 
     const struct NavItem { TextId text; Page page; } nav[] = {
         {TextId::Dashboard, Page::Dashboard},
@@ -394,7 +474,7 @@ void App::Draw() {
             const auto& task = snapshot.tasks[i];
             DrawTextBlock(renderTarget_.Get(), task.title, bodyFormat_.Get(),
                           D2D1::RectF(zRect.left + 20, rowY, zRect.right - 150, rowY + 24), primaryBrush_.Get());
-            DrawTextBlock(renderTarget_.Get(), task.status, smallFormat_.Get(),
+            DrawTextBlock(renderTarget_.Get(), TaskStatusText(localization_, task.status), smallFormat_.Get(),
                           D2D1::RectF(zRect.right - 142, rowY + 1, zRect.right - 20, rowY + 24), accentBrush_.Get(),
                           DWRITE_TEXT_ALIGNMENT_TRAILING);
             std::wstring meta = task.workspace;
@@ -471,8 +551,9 @@ void App::Draw() {
                       D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 28), accentBrush_.Get());
         rowY += 46.0f;
         if (!snapshot.error.empty()) {
-            DrawTextBlock(renderTarget_.Get(), snapshot.error, smallFormat_.Get(),
-                          D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, agentRect.bottom - 20), errorBrush_.Get());
+            (void)DrawTextFitted(renderTarget_.Get(), snapshot.error, smallFormat_.Get(),
+                                 D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, agentRect.bottom - 20),
+                                 errorBrush_.Get(), 6, true);
         }
 
         DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::HubOutbox), sectionFormat_.Get(),
@@ -506,65 +587,95 @@ void App::Draw() {
 
     const float contentWidth = right - left;
     const float heroTop = 82.0f;
-    const float heroHeight = std::min(292.0f, std::max(220.0f, size.height * 0.43f));
+
+    const auto drawCommandCard = [&](const D2D1_RECT_F& rect) {
+        DrawCard(renderTarget_.Get(), rect, surfaceStrongBrush_.Get());
+        DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::CommandCode), sectionFormat_.Get(),
+                      D2D1::RectF(rect.left + 20, rect.top + 17, rect.right - 20, rect.top + 48), primaryBrush_.Get());
+        const std::wstring plan = snapshot.plan.empty() ? L"—" : snapshot.plan;
+        DrawTextBlock(renderTarget_.Get(), std::wstring(localization_.Get(TextId::Plan)) + L"  " + plan,
+                      bodyFormat_.Get(), D2D1::RectF(rect.left + 20, rect.top + 58, rect.right - 20, rect.top + 86), accentBrush_.Get());
+
+        std::wstring credit = L"—";
+        if (snapshot.creditRemaining) {
+            credit = ToFixed(*snapshot.creditRemaining, 2);
+            if (!snapshot.creditUnit.empty()) credit += L" " + snapshot.creditUnit;
+            if (snapshot.creditLimit) credit += L" / " + ToFixed(*snapshot.creditLimit, 2);
+        }
+        DrawTextBlock(renderTarget_.Get(), credit, heroFormat_.Get(),
+                      D2D1::RectF(rect.left + 20, rect.top + 94, rect.right - 20, rect.top + 142), successBrush_.Get());
+
+        float usageY = rect.top + 152.0f;
+        const std::size_t usageCount = std::min(CommandUsageRowCount(rect.bottom - rect.top), snapshot.usageWindows.size());
+        for (std::size_t i = 0; i < usageCount; ++i) {
+            const auto& usage = snapshot.usageWindows[i];
+            std::wstring line = usage.name + L"  ";
+            line += usage.usedPercent ? ToFixed(*usage.usedPercent, 1) + L"%" : L"—";
+            DrawTextBlock(renderTarget_.Get(), line, bodyFormat_.Get(),
+                          D2D1::RectF(rect.left + 20, usageY, rect.right - 20, usageY + 26), secondaryBrush_.Get());
+            if (usage.usedPercent) {
+                const float fraction = static_cast<float>(std::clamp(*usage.usedPercent, 0.0, 100.0) / 100.0);
+                const D2D1_RECT_F rail = D2D1::RectF(rect.left + 20, usageY + 29, rect.right - 20, usageY + 36);
+                renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(rail, 3, 3), borderBrush_.Get());
+                const D2D1_RECT_F fill = D2D1::RectF(rail.left, rail.top, rail.left + (rail.right - rail.left) * fraction, rail.bottom);
+                renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(fill, 3, 3), accentBrush_.Get());
+            }
+            usageY += 54.0f;
+        }
+    };
+
+    const auto drawCurrentTaskCard = [&](const D2D1_RECT_F& rect) {
+        DrawCard(renderTarget_.Get(), rect, surfaceBrush_.Get());
+        DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::CurrentTask), sectionFormat_.Get(),
+                      D2D1::RectF(rect.left + 20, rect.top + 17, rect.right - 20, rect.top + 48), primaryBrush_.Get());
+        const TaskView* current = CurrentTask(snapshot);
+        if (current == nullptr) {
+            (void)DrawTextFitted(renderTarget_.Get(), localization_.Get(TextId::NoCurrentTask), bodyFormat_.Get(),
+                                 D2D1::RectF(rect.left + 20, rect.top + 68, rect.right - 20, rect.bottom - 20),
+                                 secondaryBrush_.Get(), 2, true);
+            return;
+        }
+
+        float y = rect.top + 64.0f;
+        const float titleBottom = std::max(y + 28.0f, std::min(y + 70.0f, rect.bottom - 78.0f));
+        const float titleHeight = DrawTextFitted(
+            renderTarget_.Get(), current->title, taskTitleFormat_.Get(),
+            D2D1::RectF(rect.left + 20, y, rect.right - 20, titleBottom),
+            primaryBrush_.Get(), 2, true
+        );
+        y += std::max(28.0f, titleHeight) + 7.0f;
+
+        const std::wstring meta = CurrentTaskMeta(localization_, *current);
+        DrawTextBlock(renderTarget_.Get(), meta, bodyFormat_.Get(),
+                      D2D1::RectF(rect.left + 20, y, rect.right - 20, std::min(rect.bottom - 46.0f, y + 26.0f)),
+                      accentBrush_.Get());
+        y += 33.0f;
+
+        if (!current->activity.empty() && y < rect.bottom - 18.0f) {
+            (void)DrawTextFitted(renderTarget_.Get(), current->activity, bodyFormat_.Get(),
+                                 D2D1::RectF(rect.left + 20, y, rect.right - 20, rect.bottom - 18),
+                                 secondaryBrush_.Get(), 3, true);
+        }
+    };
+
+    if (UseStackedDashboard(contentWidth)) {
+        const float dashboardBottom = std::max(heroTop + 410.0f, size.height - kOuterGap);
+        const float splitAvailable = dashboardBottom - heroTop - kCardGap;
+        const float taskHeight = StackedTaskCardHeight(splitAvailable);
+        const D2D1_RECT_F taskRect = D2D1::RectF(left, heroTop, right, heroTop + taskHeight);
+        const D2D1_RECT_F commandRect = D2D1::RectF(left, taskRect.bottom + kCardGap, right, dashboardBottom);
+        drawCurrentTaskCard(taskRect);
+        drawCommandCard(commandRect);
+        finish();
+        return;
+    }
+
+    const float heroHeight = std::min(300.0f, std::max(228.0f, size.height * 0.43f));
     const float columnWidth = (contentWidth - kCardGap) / 2.0f;
     const D2D1_RECT_F commandRect = D2D1::RectF(left, heroTop, left + columnWidth, heroTop + heroHeight);
     const D2D1_RECT_F taskRect = D2D1::RectF(left + columnWidth + kCardGap, heroTop, right, heroTop + heroHeight);
-    DrawCard(renderTarget_.Get(), commandRect, surfaceStrongBrush_.Get());
-    DrawCard(renderTarget_.Get(), taskRect, surfaceBrush_.Get());
-
-    DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::CommandCode), sectionFormat_.Get(),
-                  D2D1::RectF(commandRect.left + 20, commandRect.top + 17, commandRect.right - 20, commandRect.top + 48), primaryBrush_.Get());
-    const std::wstring plan = snapshot.plan.empty() ? L"—" : snapshot.plan;
-    DrawTextBlock(renderTarget_.Get(), std::wstring(localization_.Get(TextId::Plan)) + L"  " + plan,
-                  bodyFormat_.Get(), D2D1::RectF(commandRect.left + 20, commandRect.top + 58, commandRect.right - 20, commandRect.top + 86), accentBrush_.Get());
-
-    std::wstring credit = L"—";
-    if (snapshot.creditRemaining) {
-        credit = ToFixed(*snapshot.creditRemaining, 2);
-        if (!snapshot.creditUnit.empty()) credit += L" " + snapshot.creditUnit;
-        if (snapshot.creditLimit) credit += L" / " + ToFixed(*snapshot.creditLimit, 2);
-    }
-    DrawTextBlock(renderTarget_.Get(), credit, heroFormat_.Get(),
-                  D2D1::RectF(commandRect.left + 20, commandRect.top + 96, commandRect.right - 20, commandRect.top + 146), successBrush_.Get());
-
-    float usageY = commandRect.top + 162.0f;
-    const std::size_t usageCount = std::min<std::size_t>(2, snapshot.usageWindows.size());
-    for (std::size_t i = 0; i < usageCount; ++i) {
-        const auto& usage = snapshot.usageWindows[i];
-        std::wstring line = usage.name + L"  ";
-        line += usage.usedPercent ? ToFixed(*usage.usedPercent, 1) + L"%" : L"—";
-        DrawTextBlock(renderTarget_.Get(), line, bodyFormat_.Get(),
-                      D2D1::RectF(commandRect.left + 20, usageY, commandRect.right - 20, usageY + 26), secondaryBrush_.Get());
-        if (usage.usedPercent) {
-            const float fraction = static_cast<float>(std::clamp(*usage.usedPercent, 0.0, 100.0) / 100.0);
-            const D2D1_RECT_F rail = D2D1::RectF(commandRect.left + 20, usageY + 29, commandRect.right - 20, usageY + 36);
-            renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(rail, 3, 3), borderBrush_.Get());
-            const D2D1_RECT_F fill = D2D1::RectF(rail.left, rail.top, rail.left + (rail.right - rail.left) * fraction, rail.bottom);
-            renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(fill, 3, 3), accentBrush_.Get());
-        }
-        usageY += 54.0f;
-    }
-
-    DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::CurrentTask), sectionFormat_.Get(),
-                  D2D1::RectF(taskRect.left + 20, taskRect.top + 17, taskRect.right - 20, taskRect.top + 48), primaryBrush_.Get());
-    const TaskView* current = CurrentTask(snapshot);
-    if (current == nullptr) {
-        DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::NoCurrentTask), bodyFormat_.Get(),
-                      D2D1::RectF(taskRect.left + 20, taskRect.top + 76, taskRect.right - 20, taskRect.top + 130), secondaryBrush_.Get());
-    } else {
-        DrawTextBlock(renderTarget_.Get(), current->title, heroFormat_.Get(),
-                      D2D1::RectF(taskRect.left + 20, taskRect.top + 67, taskRect.right - 20, taskRect.top + 124), primaryBrush_.Get());
-        std::wstring meta = current->status;
-        if (!current->workspace.empty()) meta += L" · " + current->workspace;
-        if (current->durationSeconds) meta += L" · " + DurationText(*current->durationSeconds);
-        DrawTextBlock(renderTarget_.Get(), meta, bodyFormat_.Get(),
-                      D2D1::RectF(taskRect.left + 20, taskRect.top + 132, taskRect.right - 20, taskRect.top + 161), accentBrush_.Get());
-        if (!current->activity.empty()) {
-            DrawTextBlock(renderTarget_.Get(), current->activity, bodyFormat_.Get(),
-                          D2D1::RectF(taskRect.left + 20, taskRect.top + 178, taskRect.right - 20, taskRect.bottom - 20), secondaryBrush_.Get());
-        }
-    }
+    drawCommandCard(commandRect);
+    drawCurrentTaskCard(taskRect);
 
     const float lowerTop = heroTop + heroHeight + kCardGap;
     const float lowerBottom = std::max(lowerTop + 128.0f, size.height - kOuterGap);
