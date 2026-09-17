@@ -24,6 +24,18 @@ These values are engineering targets, not protocol fields. The first CI iteratio
 
 Absolute values become hard gates only after several stable release-build measurements establish runner/device variance.
 
+## First measured Hub baseline
+
+Go Hub CI #60 measured the statically linked PR #93 release binary on the GitHub-hosted Ubuntu 24.04 runner with Go 1.27.1. After readiness, the smoke issued 1,000 loopback `GET /api/v1/health` requests and sampled Linux `/proc` before and after the workload:
+
+| Metric | Before | After | Growth |
+| --- | ---: | ---: | ---: |
+| RSS | 13,980 KiB | 18,892 KiB | +4,912 KiB (~4.8 MiB) |
+| file descriptors | 10 | 10 | 0 |
+| OS threads | 8 | 9 | +1 |
+
+This is **one hosted-runner reference point**, not yet an absolute production memory promise. Future R2/R3 changes should be compared against this baseline and should not introduce persistent linear FD/thread/RSS growth.
+
 ## Hard growth guards
 
 ### Hub / Go services
