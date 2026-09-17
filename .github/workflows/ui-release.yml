@@ -9,6 +9,7 @@ on:
       - 'android/**'
       - 'windows-ui/**'
       - 'scripts/ci-android-apk-secret-scan.py'
+      - 'scripts/ci-android-ui-resources.py'
       - 'scripts/ci-windows-native-ui.py'
       - 'scripts/ci-windows-ui-artifact-scan.py'
       - 'scripts/ci-windows-ui-resource-smoke.ps1'
@@ -168,6 +169,9 @@ jobs:
           gradle-version: '8.11.1'
           cache-provider: basic
 
+      - name: Enforce localized low-resource UI foundation
+        run: python3 scripts/ci-android-ui-resources.py
+
       - name: Resolve release version
         shell: bash
         env:
@@ -248,11 +252,16 @@ jobs:
         run: |
           set -euo pipefail
           apk='android/app/build/outputs/apk/release/app-release.apk'
+          build_tools="${ANDROID_HOME}/build-tools/35.0.0"
           test -f "$apk"
-          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk"
-          badging="$("${ANDROID_HOME}/build-tools/35.0.0/aapt" dump badging "$apk" | head -n 1)"
+          "${build_tools}/apksigner" verify --verbose --print-certs "$apk"
+          badging="$("${build_tools}/aapt" dump badging "$apk" | head -n 1)"
           grep -F "versionCode='${HUD_ANDROID_VERSION_CODE}'" <<<"$badging"
           grep -F "versionName='${HUD_ANDROID_VERSION_NAME}'" <<<"$badging"
+          "${build_tools}/aapt2" dump resources "$apk" > /tmp/hud-release-resources.txt
+          grep -F 'activity_main' /tmp/hud-release-resources.txt
+          "${build_tools}/aapt2" dump configurations "$apk" > /tmp/hud-release-configurations.txt
+          grep -E '^land($|-)' /tmp/hud-release-configurations.txt
           python3 scripts/ci-android-apk-secret-scan.py "$apk"
           mkdir -p dist
           release_apk="dist/ai-control-hud_${RELEASE_VERSION}_android.apk"
@@ -333,6 +342,10 @@ jobs:
           for attempt in $(seq 1 60); do
             if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
               gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+              version="${GITHUB_REF_NAME#v}"
+              if [[ "$version" == *-* ]]; then
+                gh release edit "$GITHUB_REF_NAME" --prerelease
+              fi
               echo "attached UI assets to $GITHUB_REF_NAME"
               exit 0
             fi
