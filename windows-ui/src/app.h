@@ -10,6 +10,10 @@
 #include <windowsx.h>
 #include <wrl/client.h>
 
+#ifdef StartService
+#undef StartService
+#endif
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
