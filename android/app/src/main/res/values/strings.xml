@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI Control HUD</string>
+    <string name="setup_title">AI CONTROL HUD</string>
+    <string name="backend_server">Backend server</string>
+    <string name="server_hint">auto.lan or 192.168.101.103:8787</string>
+    <string name="action_connect">CONNECT</string>
+    <string name="dashboard_title">AI CONTROL</string>
+    <string name="section_zcode">ZCODE</string>
+    <string name="section_command_code">COMMAND CODE</string>
+    <string name="section_voice_alerts">VOICE ALERTS</string>
+    <string name="voice_completed_tasks">Speak completed tasks</string>
+    <string name="voice_failed_tasks">Speak failed tasks</string>
+    <string name="voice_quiet_hours">Quiet hours 23:00–08:00</string>
+    <string name="tts_starting">TTS starting</string>
+    <string name="action_test_voice">TEST VOICE</string>
+    <string name="action_server">SERVER</string>
+
+    <string name="waiting_first_snapshot">Waiting for first snapshot</string>
+    <string name="enter_valid_server">Enter a valid server address</string>
+    <string name="testing_connection">Testing connection…</string>
+    <string name="connection_failed">Connection failed: %1$s</string>
+
+    <string name="events_not_synchronized">Events not synchronized</string>
+    <string name="events_baseline_pending">Events baseline pending</string>
+    <string name="events_rebased">Events rebased · #%1$d</string>
+    <string name="events_baseline">Events baseline · #%1$d</string>
+    <string name="events_synced">Events synced · #%1$d</string>
+    <string name="events_catching_up">Events catching up · #%1$d / #%2$d</string>
+    <string name="event_schema_unsupported">Event schema %1$d unsupported</string>
+    <string name="event_sync_error">Event sync error · %1$s</string>
+
+    <string name="tts_ready">TTS READY</string>
+    <string name="tts_unavailable">TTS STARTING / UNAVAILABLE</string>
+    <string name="voice_policy_format">complete %1$s · fail %2$s · quiet %3$s</string>
+    <string name="setting_on">on</string>
+    <string name="setting_off">off</string>
+
+    <string name="status_live">● LIVE</string>
+    <string name="status_degraded">● DEGRADED</string>
+    <string name="status_waiting_agent">● WAITING FOR AGENT</string>
+    <string name="status_server_error">● SERVER ERROR</string>
+    <string name="status_offline">● OFFLINE</string>
+    <string name="status_schema_error">SCHEMA ERROR</string>
+    <string name="updated_at">Updated %1$s</string>
+
+    <string name="source_ok">HEALTHY</string>
+    <string name="source_stale">STALE</string>
+    <string name="source_error">ERROR</string>
+    <string name="source_disabled">DISABLED</string>
+    <string name="source_unknown">UNKNOWN</string>
+    <string name="source_health_format">● %1$s</string>
+    <string name="source_health_message_format">● %1$s · %2$s</string>
+
+    <string name="task_running">RUNNING</string>
+    <string name="task_waiting">WAITING</string>
+    <string name="task_failed">FAILED</string>
+    <string name="task_completed">COMPLETED</string>
+    <string name="task_unknown">UNKNOWN</string>
+    <string name="task_data_unavailable">Task data unavailable</string>
+    <string name="task_none_reported">No tasks reported</string>
+    <plurals name="task_more">
+        <item quantity="one">+%1$d more task</item>
+        <item quantity="other">+%1$d more tasks</item>
+    </plurals>
+    <string name="task_summary_unavailable">Task summary unavailable</string>
+    <string name="task_summary_format">%1$d running  ·  %2$d waiting  ·  %3$d failed</string>
+
+    <string name="plan_unavailable">Plan --</string>
+    <string name="plan_format">Plan  %1$s</string>
+    <string name="credit_unavailable">Credit --</string>
+    <string name="credit_remaining_format">%1$.2f %2$s remaining</string>
+    <string name="credit_limit_format">%1$.2f / %2$.2f %3$s</string>
+    <string name="usage_unavailable">%1$s  --</string>
+    <string name="usage_reset_suffix"> · reset %1$s</string>
+    <string name="usage_format">%1$s  %2$.1f%%%3$s</string>
+
+    <string name="hub_waiting_detail">Hub online · waiting for Windows Agent snapshot</string>
+    <string name="source_waiting_snapshot">● WAITING · no Agent snapshot</string>
+    <string name="waiting_agent_summary">Waiting for Windows Agent snapshot</string>
+    <string name="waiting_agent_task">Waiting for Agent snapshot</string>
+    <string name="server_http_error">%1$s · HTTP %2$d</string>
+    <string name="server_network_error">%1$s  ·  %2$s</string>
+    <string name="backend_schema_unsupported">Backend schema %1$d is not supported by this APK</string>
+    <string name="network_error">network error</string>
+    <string name="cursor_persistence_failed">event cursor persistence failed</string>
+
+    <string name="duration_hours_minutes">%1$dh %2$02dm</string>
+    <string name="duration_minutes_seconds">%1$dm %2$02ds</string>
+    <string name="duration_seconds">%1$ds</string>
+    <string name="duration_days_hours">%1$dd %2$02dh</string>
+    <string name="duration_clock">%1$02d:%2$02d:%3$02d</string>
+</resources>
