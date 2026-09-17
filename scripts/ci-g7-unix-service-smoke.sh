@@ -99,10 +99,13 @@ assert_service_inactive() {
 
 installed=0
 cleanup() {
+  if sudo test -e "$HUB_SECRET_PATH" 2>/dev/null; then
+    sudo "$AGENT" hub remove --config "$CONFIG_PATH" >/dev/null 2>&1 || true
+  fi
   if [[ "$installed" -eq 1 ]]; then
     bash "$ADAPTER" remove --config "$CONFIG_PATH" --purge || true
   fi
-  rm -rf "$ROOT" || true
+  sudo rm -rf "$ROOT" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
