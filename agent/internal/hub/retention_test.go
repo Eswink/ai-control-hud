@@ -144,7 +144,8 @@ func TestRetentionConfigEnvironmentAndLegacyDefaults(t *testing.T) {
 		t.Fatalf("legacy programmatic config should receive default retention: %v", err)
 	}
 	policy := RetentionPolicyFromConfig(legacy)
-	if policy.MaxAge != DefaultEventRetentionDays*24*time.Hour || policy.MinEvents != DefaultEventRetentionMin || policy.MaxEvents != DefaultEventRetentionMax {
+	expectedAge := time.Duration(DefaultEventRetentionDays) * 24 * time.Hour
+	if policy.MaxAge != expectedAge || policy.MinEvents != DefaultEventRetentionMin || policy.MaxEvents != DefaultEventRetentionMax {
 		t.Fatalf("unexpected legacy retention policy %#v", policy)
 	}
 }
