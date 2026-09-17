@@ -10,6 +10,14 @@
 #include <windowsx.h>
 #include <wrl/client.h>
 
+// Windows.h maps StartService to StartServiceW. The dashboard never calls the
+// SCM mutation API directly: UI6 delegates service mutations to the Go CLI via
+// ShellExecuteEx("runas"). Undefining only this UI translation-unit macro keeps
+// the TextId source-compatible without weakening the privilege boundary.
+#ifdef StartService
+#undef StartService
+#endif
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
