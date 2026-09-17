@@ -26,6 +26,12 @@ public:
     int Run(HINSTANCE instance, int showCommand);
 
 private:
+    enum class Page {
+        Dashboard,
+        Sources,
+        Diagnostics,
+    };
+
     static constexpr UINT kSnapshotMessage = WM_APP + 1;
     static constexpr UINT kTrayMessage = WM_APP + 2;
     static constexpr UINT kTrayOpen = 41001;
@@ -67,6 +73,7 @@ private:
     NOTIFYICONDATAW tray_{};
     bool trayAdded_{false};
     bool exitRequested_{false};
+    Page page_{Page::Dashboard};
 
     Localization localization_;
 
