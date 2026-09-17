@@ -65,7 +65,21 @@ Normal service removal preserves the outbox for durable event delivery after rei
 
 ## Linux systemd
 
-`scripts/ai-control-agent-systemd.sh` manages the Linux adapter. Recommended first install:
+`scripts/ai-control-agent-systemd.sh` manages the Linux Agent under the dedicated unit identity:
+
+```text
+ai-control-agent.service
+```
+
+The Central Hub keeps its independent unit identity:
+
+```text
+ai-control-hub.service
+```
+
+This separation is deliberate: Agent lifecycle commands must never stop, disable, delete, or reset the Central Hub service.
+
+Recommended first install:
 
 ```bash
 # Operator creates /tmp/commandcode.key first.
@@ -94,6 +108,30 @@ bash ./ai-control-agent-systemd.sh remove
 ```
 
 `upgrade` is binary-only. The candidate must pass `ai-control-agent version` before service downtime. A running service is stopped, the new binary is atomically swapped in, and the service must remain stably active; startup failure restores the previous binary and restarts it. A stopped service remains stopped. Machine config, CommandCode SecretStore, Hub SecretStore, durable event outbox, systemd unit, and configured source paths are not rewritten.
+
+### Historical Linux Agent unit migration
+
+Early cross-platform Agent builds used `ai-control-hud.service`, which later became ambiguous with the Hub product name. The current adapter supports a narrow migration path without guessing ownership.
+
+A historical-name unit is treated as Agent-owned **only** when its sole `ExecStart` exactly has this shape:
+
+```text
+/usr/local/lib/ai-control-hud/ai-control-agent run --config <one-config-argument>
+```
+
+A historical-name unit whose `ExecStart` launches `ai-control-hub` or anything else is non-Agent state and is preserved byte-for-byte by Agent install/remove. Agent lifecycle commands also refuse to fall back to that unit.
+
+When a legacy Agent unit is detected during `install`:
+
+1. if a separate replacement binary was supplied, the existing H28 transactional upgrade helper first validates/swaps it **while the historical Agent unit is still authoritative**;
+2. a bad candidate therefore rolls back its binary and leaves the historical Agent unit running; the new identity is not written;
+3. the new `ai-control-agent.service` unit is written and enabled;
+4. if the historical Agent was active, it is stopped and the new unit must become active before migration commits;
+5. if the new unit cannot become active, it is removed and the historical Agent unit is restarted;
+6. only after successful activation (or immediately for an originally inactive Agent) is the historical Agent unit disabled and removed;
+7. active/inactive state is preserved across the identity migration.
+
+Before migration, `status/start/stop/restart/upgrade` can still operate a recognized historical Agent unit. Once the dedicated unit exists, it always takes precedence.
 
 On first install the adapter resolves the invoking user's standard ZCode paths (`~/.zcode/cli/db/db.sqlite` and `~/.zcode/v2/tasks-index.sqlite`) **before** entering the root `sudo configure` context. Explicit `--runtime-db` / `--task-index-db` values take precedence. If no source can be found, installation fails instead of silently resolving `/root/.zcode`.
 
@@ -144,7 +182,7 @@ The plist is generated with macOS `plutil`, including a real `ProgramArguments` 
 
 ## Unix service validation
 
-Native CI runs service + SecretStore smoke on Ubuntu and macOS arm64. Current validation exercises:
+Native CI runs service + SecretStore smoke on Ubuntu and macOS arm64. Current shared validation exercises:
 
 1. create synthetic operator-owned CommandCode and Hub token files;
 2. create protected CommandCode and Hub SecretStores under root;
@@ -163,7 +201,15 @@ Native CI runs service + SecretStore smoke on Ubuntu and macOS arm64. Current va
 15. verify the previous custom listen value and protected credentials are preserved;
 16. start/stop again, remove the independent Hub credential, and verify final service purge deletes the outbox database/WAL/SHM.
 
-This proves service reinstall and binary upgrade do not depend on recoverable plaintext credential files and that enabling the remote Hub uploader remains compatible with Unix service hardening.
+Linux CI additionally runs a dedicated service-identity migration smoke that proves:
+
+- a legacy-name **Hub** unit is not modified, disabled, stopped, reset, or deleted by Agent install/remove;
+- an inactive historical Agent unit migrates to `ai-control-agent.service` and remains inactive;
+- an active historical Agent with a bad candidate keeps its old unit, old binary, protected state, outbox, and healthy schema-v1 service after transactional rollback;
+- a good active historical Agent migrates to the dedicated unit and remains active/healthy;
+- protected machine config, CommandCode SecretStore, Hub SecretStore, and durable outbox survive identity migration.
+
+This proves service reinstall/binary upgrade/identity migration do not depend on recoverable plaintext credential files and that enabling the remote Hub uploader remains compatible with Unix service hardening.
 
 ## Reproducible release pipeline
 
@@ -205,7 +251,7 @@ The project distinguishes:
 
 - **cross-built** — binary compiled;
 - **native runtime validated** — native CI executed collector/API behavior;
-- **service validated** — native CI exercised service adapter + SecretStore/outbox lifecycle, including transactional upgrades on Linux/macOS arm64;
+- **service validated** — native CI exercised service adapter + SecretStore/outbox lifecycle, including transactional upgrades on Linux/macOS arm64 and Linux historical-unit identity migration;
 - **target-machine validated** — real deployment hardware completed the field gate.
 
 The current CI establishes the first three levels across the supported matrix, with native service lifecycle validation on Windows, Linux amd64, and macOS arm64. Real Windows + Android core deployment has separately passed the accepted field path documented in the Central Hub roadmap.
