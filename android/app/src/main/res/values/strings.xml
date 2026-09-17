@@ -33,6 +33,7 @@
     <string name="tts_ready">TTS READY</string>
     <string name="tts_unavailable">TTS STARTING / UNAVAILABLE</string>
     <string name="voice_policy_format">complete %1$s · fail %2$s · quiet %3$s</string>
+    <string name="voice_status_format">%1$s · %2$s\n%3$s</string>
     <string name="setting_on">on</string>
     <string name="setting_off">off</string>
 
@@ -65,6 +66,8 @@
     </plurals>
     <string name="task_summary_unavailable">Task summary unavailable</string>
     <string name="task_summary_format">%1$d running  ·  %2$d waiting  ·  %3$d failed</string>
+    <string name="task_changes_format">+%1$s / -%2$s</string>
+    <string name="task_activity_format">&gt; %1$s</string>
 
     <string name="plan_unavailable">Plan --</string>
     <string name="plan_format">Plan  %1$s</string>
@@ -81,6 +84,7 @@
     <string name="waiting_agent_task">Waiting for Agent snapshot</string>
     <string name="server_http_error">%1$s · HTTP %2$d</string>
     <string name="server_network_error">%1$s  ·  %2$s</string>
+    <string name="http_status">HTTP %1$d</string>
     <string name="backend_schema_unsupported">Backend schema %1$d is not supported by this APK</string>
     <string name="network_error">network error</string>
     <string name="cursor_persistence_failed">event cursor persistence failed</string>
