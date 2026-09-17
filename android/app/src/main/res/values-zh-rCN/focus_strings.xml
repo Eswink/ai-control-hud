@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="focus_mode_subtitle">Agent 监控 · 横屏专注模式</string>
+    <string name="focus_command_remaining">CommandCode 套餐剩余</string>
+    <string name="focus_current_task">当前任务</string>
+    <string name="focus_tts_status">TTS 状态</string>
+    <string name="desk_display_keep_awake">横屏桌面显示模式保持亮屏</string>
+    <string name="events_history_expired">部分历史事件已过期 · 游标已重建 #%1$d</string>
+</resources>
