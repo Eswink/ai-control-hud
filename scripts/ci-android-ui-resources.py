@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the Android UI resource/i18n foundation without Android tooling."""
+"""Enforce the Android UI resource/i18n and low-resource layout contract."""
 from __future__ import annotations
 
 import re
@@ -8,8 +8,10 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-RES = ROOT / "android" / "app" / "src" / "main" / "res"
-MAIN_ACTIVITY = ROOT / "android" / "app" / "src" / "main" / "java" / "dev" / "eswink" / "aicontrolhud" / "MainActivity.java"
+ANDROID_MAIN = ROOT / "android" / "app" / "src" / "main"
+RES = ANDROID_MAIN / "res"
+MAIN_ACTIVITY = ANDROID_MAIN / "java" / "dev" / "eswink" / "aicontrolhud" / "MainActivity.java"
+MANIFEST = ANDROID_MAIN / "AndroidManifest.xml"
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 
 
@@ -45,6 +47,54 @@ def check_layouts() -> None:
                     fail(f"{path.relative_to(ROOT)} has hard-coded android:{attribute}={value!r}")
 
 
+def check_landscape_focus() -> None:
+    path = RES / "layout-land" / "activity_main.xml"
+    if not path.is_file():
+        fail("landscape focus layout is missing")
+    root = ET.parse(path).getroot()
+    ids = {
+        value.removeprefix("@+id/").removeprefix("@id/")
+        for element in root.iter()
+        if (value := element.attrib.get(ANDROID_NS + "id"))
+    }
+    required = {
+        "setupPanel",
+        "dashboardPanel",
+        "serverUrlInput",
+        "connectButton",
+        "setupStatus",
+        "serverLabel",
+        "liveStatus",
+        "changeServerButton",
+        "commandHealth",
+        "planText",
+        "creditText",
+        "fiveHourLabel",
+        "fiveHourProgress",
+        "weeklyLabel",
+        "weeklyProgress",
+        "zcodeHealth",
+        "zcodeSummary",
+        "taskList",
+        "taskEmpty",
+        "taskOverflow",
+        "lastUpdateText",
+        "voiceStatusText",
+        "completedVoiceSwitch",
+        "failedVoiceSwitch",
+        "quietHoursSwitch",
+        "testVoiceButton",
+    }
+    missing = sorted(required - ids)
+    if missing:
+        fail("landscape focus layout is missing bound views: " + ", ".join(missing))
+
+    text = path.read_text(encoding="utf-8")
+    for required_string in ("@string/focus_command_remaining", "@string/focus_current_task", "@string/focus_tts_status"):
+        if required_string not in text:
+            fail(f"landscape focus layout is missing {required_string}")
+
+
 def check_catalogs() -> None:
     default = ui_names(RES / "values")
     zh_cn = ui_names(RES / "values-zh-rCN")
@@ -58,7 +108,7 @@ def check_catalogs() -> None:
 def check_activity() -> None:
     text = MAIN_ACTIVITY.read_text(encoding="utf-8")
     banned = {
-        "FLAG_KEEP_SCREEN_ON": "portrait Activity must not keep the screen on unconditionally",
+        "FLAG_KEEP_SCREEN_ON": "Activity must not keep the screen on unconditionally",
         "Color.rgb(": "MainActivity colors must use resource tokens",
     }
     for token, reason in banned.items():
@@ -73,11 +123,24 @@ def check_activity() -> None:
         fail("MainActivity is missing destroyed-Activity callback guard")
 
 
+def check_manifest_rotation() -> None:
+    root = ET.parse(MANIFEST).getroot()
+    for activity in root.findall("./application/activity"):
+        if activity.attrib.get(ANDROID_NS + "name") != ".MainActivity":
+            continue
+        if ANDROID_NS + "screenOrientation" in activity.attrib:
+            fail("MainActivity must not be locked to one orientation once layout-land exists")
+        return
+    fail("MainActivity is missing from AndroidManifest.xml")
+
+
 def main() -> int:
     check_layouts()
+    check_landscape_focus()
     check_catalogs()
     check_activity()
-    print("[android-ui-resources] PASS localized-resources=literals-free lifecycle-guard=present")
+    check_manifest_rotation()
+    print("[android-ui-resources] PASS localized-resources=literals-free landscape=focus lifecycle-guard=present")
     return 0
 
 
