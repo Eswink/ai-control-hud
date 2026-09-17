@@ -20,7 +20,7 @@ import (
 
 var statusSeparators = regexp.MustCompile(`[\s-]+`)
 
-var runningStatuses = setOf("running", "in_progress", "inprogress", "active", "working", "executing")
+var runningStatuses = setOf("running", "in_progress", "inprogress", "active", "working", "executing", "streaming", "in_flight", "inflight")
 var waitingStatuses = setOf("waiting", "queued", "pending", "ready", "todo")
 var failedStatuses = setOf("failed", "failure", "error", "errored")
 var completedStatuses = setOf("completed", "complete", "done", "success", "succeeded", "finished")
@@ -96,6 +96,14 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		}
 		if available && live != nil && len(live.Tasks) > 0 {
 			return live, nil
+		}
+
+		runtime, runtimeAvailable, err := c.collectRuntimeSessions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if runtimeAvailable && runtime != nil && len(runtime.Tasks) > 0 {
+			return runtime, nil
 		}
 	}
 	if fileExists(c.TaskIndexDB) {
