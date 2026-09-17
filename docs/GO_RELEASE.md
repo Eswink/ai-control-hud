@@ -7,7 +7,7 @@ Windows/macOS/Linux ai-control-agent
 Linux/amd64         ai-control-hub deployment bundle
 ```
 
-The existing workflow file remains `.github/workflows/go-release.yml`. Its visible workflow name stays `Go Agent Release` for check-name continuity, but the combined release artifact is now an AI Control HUD Go release rather than Agent-only output.
+The workflow file remains `.github/workflows/go-release.yml`. Its visible workflow name stays `Go Agent Release` for check-name continuity, but the combined release artifact is an AI Control HUD Go release rather than Agent-only output.
 
 ## Version sources
 
@@ -40,37 +40,61 @@ CGO_ENABLED=0
 
 and requires byte-for-byte equality before packaging.
 
-Targets:
+Targets and archive contracts:
 
 ```text
-windows-amd64  zip
-linux-amd64    tar.gz
-darwin-amd64   tar.gz
-darwin-arm64   tar.gz
+windows-amd64.zip
+  ai-control-agent.exe
+
+linux-amd64.tar.gz
+  ai-control-agent
+  ai-control-agent-systemd.sh
+  ai-control-agent-unix-upgrade.sh
+
+darwin-amd64.tar.gz
+  ai-control-agent
+  ai-control-agent-launchd.sh
+  ai-control-agent-unix-upgrade.sh
+
+darwin-arm64.tar.gz
+  ai-control-agent
+  ai-control-agent-launchd.sh
+  ai-control-agent-unix-upgrade.sh
 ```
 
-Linux/amd64 is executed after extraction to prove its embedded `version` matches the release version.
+The package builder uses deterministic entry ordering, fixed timestamps/ownership, and executable modes. PR release CI extracts every Agent archive and verifies the platform-specific members. Linux/amd64 is additionally executed after extraction to prove its embedded `version` matches the release version.
+
+The Unix service adapters expose transactional `upgrade --agent PATH` and delegate binary swap/rollback to the shared `ai-control-agent-unix-upgrade.sh`. Runtime machine config and protected SecretStores remain host state and are never placed in release archives.
 
 ## Hub target
 
 The Hub release target is Linux/amd64 only. CI builds the standalone `ai-control-hub` binary twice with the same reproducibility flags and requires byte equality and static linking.
 
-It then runs `scripts/package-h3-validation.py`, producing:
+It then runs the production packager:
+
+```text
+scripts/package-hub-bundle.py
+```
+
+producing:
 
 ```text
 ai-control-hub_<version>_linux-amd64.zip
 ```
 
-The bundle includes the executable plus the supported production assets:
+The bundle includes the executable plus supported production assets:
 
 - hardened systemd installer;
 - trusted-LAN readiness doctor;
-- Hub deployment runbook;
+- transactional binary-upgrade helper;
+- Hub deployment and upgrade runbooks;
 - field-validation/first-install notes;
 - `BUILD_INFO.txt`;
-- internal `SHA256SUMS`.
+- internal `SHA256SUMS` covering every bundle member except the checksum file itself.
 
-Release CI extracts the bundle, executes `ai-control-hub version`, verifies the internal checksums, and requires the systemd/LAN-doctor/runbook files to be present.
+The historical `package-h3-validation.py` name remains only as a compatibility wrapper around the same bundle implementation; it is not the production packaging entrypoint.
+
+Release CI extracts the production bundle, executes `ai-control-hub version`, verifies BUILD_INFO, verifies the internal checksums, and requires the systemd/LAN-doctor/upgrade/runbook files to be present.
 
 ## Unified manifest
 
@@ -82,14 +106,7 @@ SHA256SUMS
 
 covering all `.zip` and `.tar.gz` archives.
 
-The manifest explicitly requires both:
-
-```text
-ai-control-agent_<version>_windows-amd64.zip
-ai-control-hub_<version>_linux-amd64.zip
-```
-
-so a release cannot silently publish only one component.
+The same job builds and immediately verifies `RELEASE_MANIFEST.json` schema v1. It records the exact required target set, component/platform identity, archive filename, byte size, SHA-256, release version, and build commit. Missing, duplicate, unexpected, or modified archives fail verification.
 
 The combined Actions artifact is:
 
@@ -99,7 +116,7 @@ ai-control-hud-go-release-<version>
 
 ## Attestation and tag publishing
 
-For manual/tag releases (not pull requests), GitHub artifact attestation covers all Agent/Hub archives and the unified `SHA256SUMS`.
+For manual/tag releases (not pull requests), GitHub artifact attestation covers all Agent/Hub archives plus `SHA256SUMS` and `RELEASE_MANIFEST.json`.
 
 A pushed `v*` tag publishes the combined files as one GitHub Release titled:
 
@@ -111,4 +128,6 @@ The Android production-signed APK has its own signing workflow because its keyst
 
 ## Security boundaries
 
-Go release artifacts contain no Hub bearer token, CommandCode API key, DPAPI record, ZCode database, local `.env`, or Android signing key. Runtime credentials are configured after installation using the documented platform SecretStore/token-file paths.
+Go release artifacts contain no Hub bearer token, CommandCode API key, DPAPI record, Unix SecretStore record, ZCode database, local `.env`, or Android signing key. Runtime credentials are configured after installation using the documented platform SecretStore/token-file paths.
+
+Binary upgrade helpers are deliberately credential-blind: they validate and replace executables while preserving existing service definitions and host state rather than re-running credential import or installation.
