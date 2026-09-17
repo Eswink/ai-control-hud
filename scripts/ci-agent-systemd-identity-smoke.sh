@@ -61,6 +61,18 @@ raise SystemExit(1)
 PY
 }
 
+wait_failed() {
+  local service="$1"
+  local i
+  for ((i = 0; i < 40; i++)); do
+    if sudo systemctl is-failed --quiet "$service"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
 remove_fixture_legacy_unit() {
   if sudo test -f "$LEGACY_UNIT" && sudo grep -Fq '# H29-CI-FIXTURE' "$LEGACY_UNIT"; then
     sudo systemctl stop "$LEGACY_SERVICE" 2>/dev/null || true
@@ -173,11 +185,8 @@ EOF
 sudo install -m 0644 "$hub_unit_tmp" "$LEGACY_UNIT"
 sudo systemctl daemon-reload
 sudo systemctl enable "$LEGACY_SERVICE"
-if sudo systemctl start "$LEGACY_SERVICE"; then
-  echo "synthetic Hub fixture unexpectedly started" >&2
-  exit 1
-fi
-sudo systemctl is-failed --quiet "$LEGACY_SERVICE"
+sudo systemctl start "$LEGACY_SERVICE" >/dev/null 2>&1 || true
+wait_failed "$LEGACY_SERVICE" || { echo "synthetic Hub fixture did not enter failed state" >&2; exit 1; }
 hub_unit_hash="$(hash_root_file "$LEGACY_UNIT")"
 HOME="$HOME_ROOT" bash "$ADAPTER" install --agent "$AGENT" --config "$config"
 sudo test -f "$NEW_UNIT"
