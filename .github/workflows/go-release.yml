@@ -15,14 +15,20 @@ on:
     paths:
       - 'agent/**'
       - 'scripts/package-agent-release.py'
+      - 'scripts/ai-control-agent-systemd.sh'
+      - 'scripts/ai-control-agent-launchd.sh'
+      - 'scripts/ai-control-agent-unix-upgrade.sh'
       - 'scripts/hub_bundle.py'
       - 'scripts/package-hub-bundle.py'
       - 'scripts/package-h3-validation.py'
       - 'scripts/go_release_manifest.py'
       - 'scripts/ai-control-hub-systemd.sh'
       - 'scripts/ai-control-hub-lan-doctor.sh'
+      - 'scripts/ai-control-hub-upgrade.sh'
+      - 'docs/G7_CROSS_PLATFORM.md'
       - 'docs/HUB_DEPLOYMENT.md'
       - 'docs/HUB_LAN_DOCTOR.md'
+      - 'docs/HUB_UPGRADE.md'
       - 'docs/GO_RELEASE.md'
       - 'docs/GO_RELEASE_MANIFEST.md'
       - '.github/workflows/go-release.yml'
@@ -107,23 +113,60 @@ jobs:
           cmp "build-a/${{ matrix.binary }}" "build-b/${{ matrix.binary }}"
           cp "build-a/${{ matrix.binary }}" "dist/${{ matrix.binary }}"
           archive="ai-control-agent_${VERSION}_${{ matrix.target }}.${{ matrix.format }}"
+          extra_args=()
+          case "${{ matrix.goos }}" in
+            linux)
+              extra_args+=(
+                --extra "scripts/ai-control-agent-systemd.sh=ai-control-agent-systemd.sh"
+                --extra "scripts/ai-control-agent-unix-upgrade.sh=ai-control-agent-unix-upgrade.sh"
+              )
+              ;;
+            darwin)
+              extra_args+=(
+                --extra "scripts/ai-control-agent-launchd.sh=ai-control-agent-launchd.sh"
+                --extra "scripts/ai-control-agent-unix-upgrade.sh=ai-control-agent-unix-upgrade.sh"
+              )
+              ;;
+          esac
           python3 scripts/package-agent-release.py \
             --binary "dist/${{ matrix.binary }}" \
             --output "dist/$archive" \
             --archive-name "${{ matrix.binary }}" \
-            --format "${{ matrix.format }}"
+            --format "${{ matrix.format }}" \
+            "${extra_args[@]}"
           rm "dist/${{ matrix.binary }}"
           (cd dist && sha256sum "$archive" > "$archive.sha256")
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
-      - name: Verify Agent embedded version
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+      - name: Verify Agent archive contents
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf verify
           mkdir -p verify
-          gzip -dc "dist/$ARCHIVE" | tar -xf - -C verify
-          test "$(verify/ai-control-agent version)" = "$VERSION"
+          case "${{ matrix.format }}" in
+            zip) unzip -q "dist/$ARCHIVE" -d verify ;;
+            tar.gz) gzip -dc "dist/$ARCHIVE" | tar -xf - -C verify ;;
+          esac
+          test -f "verify/${{ matrix.binary }}"
+          case "${{ matrix.goos }}" in
+            windows)
+              test ! -e verify/ai-control-agent-unix-upgrade.sh
+              ;;
+            linux)
+              test -x verify/ai-control-agent
+              test -x verify/ai-control-agent-systemd.sh
+              test -x verify/ai-control-agent-unix-upgrade.sh
+              test ! -e verify/ai-control-agent-launchd.sh
+              test "$(verify/ai-control-agent version)" = "$VERSION"
+              ;;
+            darwin)
+              test -x verify/ai-control-agent
+              test -x verify/ai-control-agent-launchd.sh
+              test -x verify/ai-control-agent-unix-upgrade.sh
+              test ! -e verify/ai-control-agent-systemd.sh
+              ;;
+          esac
 
       - name: Upload Agent target artifact
         uses: actions/upload-artifact@v7
@@ -216,7 +259,9 @@ jobs:
           )
           test -f "$tmp/scripts/ai-control-hub-systemd.sh"
           test -f "$tmp/scripts/ai-control-hub-lan-doctor.sh"
+          test -f "$tmp/scripts/ai-control-hub-upgrade.sh"
           test -f "$tmp/docs/HUB_DEPLOYMENT.md"
+          test -f "$tmp/docs/HUB_UPGRADE.md"
 
       - name: Upload Hub target artifact
         uses: actions/upload-artifact@v7
