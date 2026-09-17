@@ -100,6 +100,7 @@ type EventPage struct {
 	Events        []HubEvent `json:"events"`
 	NextAfter     int64      `json:"nextAfter"`
 	LatestSeq     int64      `json:"latestSeq"`
+	OldestSeq     int64      `json:"oldestSeq"`
 }
 
 func validateAgentID(value string) error {
