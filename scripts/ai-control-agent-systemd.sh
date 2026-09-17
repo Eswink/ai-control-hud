@@ -7,6 +7,8 @@ SERVICE_NAME="ai-control-hud.service"
 INSTALL_DIR="/usr/local/lib/ai-control-hud"
 CONFIG_PATH="/etc/ai-control-hud/agent.json"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}"
+AGENT_DATA_DIR="/var/lib/ai-control-hud/agent"
+OUTBOX_PATH="$AGENT_DATA_DIR/events.sqlite3"
 LISTEN=""
 AGENT=""
 PROVIDER_CONFIG=""
@@ -107,6 +109,8 @@ case "$ACTION" in
 
     sudo install -d -m 0755 "$INSTALL_DIR"
     sudo install -m 0755 "$agent_abs" "$INSTALL_DIR/ai-control-agent"
+    sudo install -d -m 0755 "$(dirname "$AGENT_DATA_DIR")"
+    sudo install -d -o root -g root -m 0700 "$AGENT_DATA_DIR"
 
     configure=(sudo "$INSTALL_DIR/ai-control-agent" configure --config "$config_abs")
     if [[ -n "$LISTEN" ]]; then
@@ -129,6 +133,7 @@ After=network-online.target
 
 [Service]
 Type=simple
+Environment=AI_CONTROL_HUB_OUTBOX=$OUTBOX_PATH
 ExecStart=$INSTALL_DIR/ai-control-agent run --config "$config_abs"
 Restart=on-failure
 RestartSec=5s
@@ -140,6 +145,7 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 LockPersonality=true
+ReadWritePaths=$AGENT_DATA_DIR
 
 [Install]
 WantedBy=multi-user.target
@@ -147,7 +153,7 @@ EOF
     sudo install -m 0644 "$unit_tmp" "$UNIT_PATH"
     sudo systemctl daemon-reload
     sudo systemctl enable "$SERVICE_NAME"
-    echo "[systemd] installed service=$SERVICE_NAME config=$config_abs"
+    echo "[systemd] installed service=$SERVICE_NAME config=$config_abs outbox=$OUTBOX_PATH"
     ;;
   upgrade)
     require_systemd
@@ -185,11 +191,13 @@ EOF
       [[ -z "$secret_path" ]] || sudo rm -f "$secret_path"
       sudo rm -f "$CONFIG_PATH"
       sudo rmdir "$(dirname "$CONFIG_PATH")" 2>/dev/null || true
+      sudo rm -f "$OUTBOX_PATH" "$OUTBOX_PATH-wal" "$OUTBOX_PATH-shm"
+      sudo rmdir "$AGENT_DATA_DIR" 2>/dev/null || true
       sudo rm -f "$INSTALL_DIR/ai-control-agent"
       sudo rmdir "$INSTALL_DIR" 2>/dev/null || true
       echo "[systemd] removed and purged"
     else
-      echo "[systemd] removed; config/SecretStore and installed binary preserved"
+      echo "[systemd] removed; config/SecretStore, event outbox, and installed binary preserved"
     fi
     ;;
   *)
