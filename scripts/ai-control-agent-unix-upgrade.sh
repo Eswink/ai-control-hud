@@ -102,6 +102,31 @@ service_state() {
   esac
 }
 
+settled_service_state() {
+  local current attempt
+  current="$(service_state)"
+  if [[ "$MANAGER" != "launchd" || "$current" != "loaded-not-running" ]]; then
+    printf '%s\n' "$current"
+    return
+  fi
+  for ((attempt = 1; attempt <= LAUNCHD_TRANSITION_ATTEMPTS; attempt++)); do
+    sleep "$LAUNCHD_TRANSITION_DELAY"
+    current="$(service_state)"
+    case "$current" in
+      active|inactive)
+        printf '%s\n' "$current"
+        return
+        ;;
+      loaded-not-running) ;;
+      *)
+        printf '%s\n' "$current"
+        return
+        ;;
+    esac
+  done
+  printf '%s\n' "$current"
+}
+
 start_service() {
   case "$MANAGER" in
     systemd)
@@ -177,7 +202,7 @@ wait_stable_running() {
   return 1
 }
 
-state="$(service_state)"
+state="$(settled_service_state)"
 case "$state" in
   active) was_active=1 ;;
   inactive) was_active=0 ;;
