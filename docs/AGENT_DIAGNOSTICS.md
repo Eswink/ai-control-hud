@@ -1,18 +1,18 @@
 # Go Agent source diagnostics
 
-Status: H11 operational diagnostics contract
+Status: operational diagnostics contract with R3 durable-outbox metadata
 
-The Windows development-machine Agent exposes a local/trusted-LAN diagnostics endpoint without changing the Android-facing schema-v1 state contract:
+The development-machine Agent exposes a local/trusted-LAN diagnostics endpoint without changing the Android-facing schema-v1 state contract:
 
 ```text
 GET /api/v1/diagnostics
 ```
 
-This endpoint is intended for operator troubleshooting. It reports source-adapter state without exposing credentials, provider configuration, private filesystem paths, task content, workspace names, or raw source error text.
+This endpoint is intended for operator troubleshooting and the future native Windows Agent UI. It reports bounded operational metadata without exposing credentials, provider configuration, private filesystem paths, task content, workspace names, event JSON, or raw source error text.
 
 ## Response contract
 
-Diagnostics has its own version independent from state schema v1:
+Diagnostics has its own version independent from state schema v1. `outbox` is an additive optional field in diagnostics v1 and is present only when remote Hub upload (and therefore the durable event outbox) is configured.
 
 ```json
 {
@@ -39,6 +39,14 @@ Diagnostics has its own version independent from state schema v1:
       "lastSuccessAgeSeconds": 68,
       "schemaSupport": "supported"
     }
+  },
+  "outbox": {
+    "status": "ok",
+    "pendingEvents": 3,
+    "taskBaselineRows": 1250,
+    "compactedTaskRows": 900,
+    "oldestPendingAgeSeconds": 90,
+    "reusableBytes": 32768
   }
 }
 ```
@@ -67,6 +75,21 @@ All values above are synthetic examples.
 - `unknown` — the source is enabled but has not yet produced a success and is failing/waiting for a reason that does not establish schema compatibility;
 - `not-configured` — the source is disabled/not configured.
 
+## Durable outbox fields
+
+The optional `outbox` object contains only aggregate metadata:
+
+- `status`: `ok`, `warning`, `error`, or `not-configured`;
+- `pendingEvents`: durable terminal events not yet acknowledged by the Hub;
+- `taskBaselineRows`: remembered task identities/statuses used to avoid replaying old terminal transitions;
+- `compactedTaskRows`: old terminal baselines whose display payload has been cleared while identity/status is retained;
+- `oldestPendingAgeSeconds`: age of the oldest pending durable event, or null when none are pending;
+- `reusableBytes`: SQLite free-page bytes available for reuse.
+
+`warning` is currently used when pending events reach 10,000 or the oldest pending event is at least 24 hours old. The UI should display the warning, not delete data.
+
+R3 maintenance never deletes pending `event_outbox` rows. Terminal baseline compaction keeps `task_id`, status, and last-seen time so re-observing the same historical completed/failed task does not create a duplicate semantic event.
+
 ## Security boundary
 
 The diagnostics response deliberately omits:
@@ -75,13 +98,14 @@ The diagnostics response deliberately omits:
 - Hub bearer tokens;
 - DPAPI/SecretStore contents;
 - CommandCode provider URL/base URL;
-- ZCode database paths;
+- ZCode/outbox database paths;
 - user profile paths;
 - task titles/workspaces/activity;
+- event IDs/event JSON;
 - credit/plan/usage payloads;
 - raw source error messages.
 
-The existing canonical `/api/v1/state` health message remains independently sanitized by the runtime. Diagnostics does not copy that free-text message at all, which prevents a future collector error from accidentally turning this operational endpoint into a path/log disclosure surface.
+The existing canonical `/api/v1/state` health message remains independently sanitized by the runtime. Diagnostics does not copy source free-text messages into the operational metadata.
 
 ## Relationship to other APIs
 
@@ -91,10 +115,12 @@ The existing canonical `/api/v1/state` health message remains independently sani
 
 `GET /api/v1/diagnostics` is richer operational metadata for the **development-machine Agent**. It is not required by Android and is not an Agent-to-Hub transport contract.
 
-The Central Hub does not need this endpoint to ingest state/events, and H11 does not add a new upload payload or credential.
+The Central Hub does not need this endpoint to ingest state/events.
 
 ## CI coverage
 
-Go API tests cover healthy, disabled, and explicit unsupported-schema diagnostics and assert that private source error text is absent from the encoded response.
+Go API tests cover healthy, disabled, unsupported-schema, and optional outbox diagnostics and assert that private source error text is absent from the encoded response.
 
-The native Agent runtime smoke runs on Windows, Linux, macOS arm64, and macOS amd64. It queries `/api/v1/diagnostics`, validates adapter/status/schema fields, and verifies that its temporary private database path is absent from the response.
+Events tests cover durable pending preservation, terminal-baseline payload compaction, duplicate-event prevention after compaction, and the 1,000-row compaction batch bound.
+
+The native Agent runtime/service matrix continues to run on Windows, Linux, macOS arm64, and macOS amd64.
