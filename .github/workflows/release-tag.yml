@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -23,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate request and create immutable release tag
+      - name: Validate request, create immutable tag, and dispatch release workflows
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,11 +77,17 @@ jobs:
               exit 1
             fi
             echo "tag $tag already exists at the requested commit"
-            exit 0
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$tag" "$target" -m "AI Control HUD $version"
+            git push origin "refs/tags/$tag"
+            echo "created $tag at $target"
           fi
 
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$tag" "$target" -m "AI Control HUD $version"
-          git push origin "refs/tags/$tag"
-          echo "created $tag at $target"
+          # GITHUB_TOKEN pushes intentionally do not recursively trigger ordinary
+          # push workflows. workflow_dispatch is the supported exception, so
+          # explicitly start both release pipelines from the immutable tag.
+          gh workflow run ui-release.yml --ref "$tag" -f version="$version" -f publish=true
+          gh workflow run go-release.yml --ref "$tag" -f version="$version" -f publish=true
+          echo "dispatched UI and Go release workflows for $tag"

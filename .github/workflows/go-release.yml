@@ -8,6 +8,11 @@ on:
         required: true
         default: 0.3.0-rc.1
         type: string
+      publish:
+        description: Publish artifacts to the existing v<version> tag
+        required: true
+        default: false
+        type: boolean
   push:
     tags:
       - 'v*'
@@ -377,15 +382,31 @@ jobs:
             dist/RELEASE_MANIFEST.json
 
   publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish)
     needs: [manifest, attest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Resolve version
+      - name: Resolve publish target
         shell: bash
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
+            version="$INPUT_VERSION"
+            tag="$GITHUB_REF_NAME"
+            if [[ "$tag" != "v$version" ]]; then
+              echo "workflow_dispatch must run from tag v$version, got $tag" >&2
+              exit 1
+            fi
+          else
+            tag="$GITHUB_REF_NAME"
+            version="${tag#v}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Download combined Go release artifact
         uses: actions/download-artifact@v8.0.1
@@ -398,7 +419,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$RELEASE_TAG" dist/* \
             --verify-tag \
             --generate-notes \
             --title "AI Control HUD $VERSION"

@@ -22,6 +22,11 @@ on:
         required: true
         default: 0.4.0-rc.1
         type: string
+      publish:
+        description: Attach artifacts to the existing v<version> release
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: ui-release-${{ github.event.pull_request.number || github.ref }}
@@ -320,12 +325,32 @@ jobs:
             dist/android-release-metadata.txt
 
   publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish)
     needs: [windows, android, attest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Resolve publish target
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
+            version="$INPUT_VERSION"
+            tag="$GITHUB_REF_NAME"
+            if [[ "$tag" != "v$version" ]]; then
+              echo "workflow_dispatch must run from tag v$version, got $tag" >&2
+              exit 1
+            fi
+          else
+            tag="$GITHUB_REF_NAME"
+            version="${tag#v}"
+          fi
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
       - name: Download UI release artifacts
         uses: actions/download-artifact@v8.0.1
         with:
@@ -340,17 +365,16 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 60); do
-            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-              gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-              version="${GITHUB_REF_NAME#v}"
-              if [[ "$version" == *-* ]]; then
-                gh release edit "$GITHUB_REF_NAME" --prerelease
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              gh release upload "$RELEASE_TAG" dist/* --clobber
+              if [[ "$RELEASE_VERSION" == *-* ]]; then
+                gh release edit "$RELEASE_TAG" --prerelease
               fi
-              echo "attached UI assets to $GITHUB_REF_NAME"
+              echo "attached UI assets to $RELEASE_TAG"
               exit 0
             fi
             echo "waiting for Go release publication ($attempt/60)"
             sleep 10
           done
-          echo "GitHub release $GITHUB_REF_NAME was not published by the Go release workflow" >&2
+          echo "GitHub release $RELEASE_TAG was not published by the Go release workflow" >&2
           exit 1
