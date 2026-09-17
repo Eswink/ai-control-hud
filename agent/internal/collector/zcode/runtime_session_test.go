@@ -121,3 +121,59 @@ func TestStaleRuntimeRunningRowDoesNotResurrect(t *testing.T) {
 		t.Fatalf("expected stale row rejection, got %v", err)
 	}
 }
+
+func TestOpenTurnOverridesTerminalModelUsage(t *testing.T) {
+	now := time.Date(2026, 9, 18, 1, 30, 0, 0, time.UTC)
+	root := t.TempDir()
+	runtimeDB := filepath.Join(root, "db.sqlite")
+	createRuntimeSessionDB(t, runtimeDB, []struct {
+		status    string
+		startedAt int64
+	}{{status: "completed", startedAt: now.Add(-10 * time.Second).UnixMilli()}})
+	logDir := filepath.Join(root, "log")
+	writeTurnLog(t, logDir,
+		turnLine("turn.started", "session-normal", now.Add(-75*time.Second)),
+		turnLine("model.streaming", "session-normal", now.Add(-2*time.Second)),
+	)
+
+	collector := New(runtimeDB, "")
+	collector.LogDir = logDir
+	collector.TurnFreshSeconds = 1800
+	collector.Now = func() time.Time { return now }
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Summary.Running != 1 || len(snapshot.Tasks) != 1 || snapshot.Tasks[0].Status != "running" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if snapshot.Tasks[0].DurationSeconds == nil || *snapshot.Tasks[0].DurationSeconds != 75 {
+		t.Fatalf("duration = %#v", snapshot.Tasks[0].DurationSeconds)
+	}
+	if strings.Contains(snapshot.Tasks[0].ID, "session-normal") {
+		t.Fatalf("raw session id leaked: %q", snapshot.Tasks[0].ID)
+	}
+}
+
+func TestTerminalTurnSuppressesOlderRunningUsage(t *testing.T) {
+	now := time.Date(2026, 9, 18, 1, 30, 0, 0, time.UTC)
+	root := t.TempDir()
+	runtimeDB := filepath.Join(root, "db.sqlite")
+	createRuntimeSessionDB(t, runtimeDB, []struct {
+		status    string
+		startedAt int64
+	}{{status: "running", startedAt: now.Add(-90 * time.Second).UnixMilli()}})
+	logDir := filepath.Join(root, "log")
+	writeTurnLog(t, logDir,
+		turnLine("turn.started", "session-normal", now.Add(-100*time.Second)),
+		turnLine("turn.failed", "session-normal", now.Add(-5*time.Second)),
+	)
+
+	collector := New(runtimeDB, "")
+	collector.LogDir = logDir
+	collector.Now = func() time.Time { return now }
+	_, err := collector.Collect(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "task sources are unavailable") {
+		t.Fatalf("terminal turn should suppress old running usage, got %v", err)
+	}
+}
