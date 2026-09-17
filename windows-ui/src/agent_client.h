@@ -4,6 +4,7 @@
 
 #include <Windows.h>
 #include <winhttp.h>
+#include <winrt/Windows.Foundation.Collections.h>
 
 #include <string>
 
