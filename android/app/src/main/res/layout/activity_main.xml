@@ -395,6 +395,14 @@
                     android:textColor="@color/hud_text_primary"
                     android:textSize="@dimen/hud_text_14" />
 
+                <dev.eswink.aicontrolhud.DeskDisplaySwitch
+                    android:id="@+id/deskDisplaySwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/hud_touch_min"
+                    android:text="@string/desk_display_keep_awake"
+                    android:textColor="@color/hud_text_primary"
+                    android:textSize="@dimen/hud_text_14" />
+
                 <Button
                     android:id="@+id/testVoiceButton"
                     android:layout_width="match_parent"

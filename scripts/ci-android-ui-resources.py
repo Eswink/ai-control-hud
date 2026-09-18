@@ -144,27 +144,37 @@ def check_manifest_rotation() -> None:
     fail("MainActivity is missing from AndroidManifest.xml")
 
 
-def check_desk_display_policy() -> None:
+def check_keep_awake_policy() -> None:
     if not DISPLAY_POLICY.is_file() or not DESK_DISPLAY_SWITCH.is_file():
-        fail("desk-display policy and switch implementation are required")
+        fail("keep-awake policy and switch implementation are required")
 
     policy = DISPLAY_POLICY.read_text(encoding="utf-8")
-    if "windowVisible && landscape && deskDisplayEnabled" not in policy:
-        fail("keep-awake policy must require visible + landscape + enabled")
+    if "windowVisible && keepAwakeEnabled" not in policy:
+        fail("keep-awake policy must require visible + enabled")
+    if "landscape" in policy:
+        fail("keep-awake policy must work in both portrait and landscape")
 
     switch = DESK_DISPLAY_SWITCH.read_text(encoding="utf-8")
     required_tokens = (
         "getWindowVisibility() == View.VISIBLE",
-        "Configuration.ORIENTATION_LANDSCAPE",
-        "DisplayPolicy.shouldKeepScreenOn",
+        "DisplayPolicy.shouldKeepScreenOn(windowVisible, isChecked())",
         "onDetachedFromWindow()",
         "setKeepScreenOn(false)",
     )
     for token in required_tokens:
         if token not in switch:
             fail(f"DeskDisplaySwitch is missing lifecycle guard {token!r}")
+    if "Configuration.ORIENTATION_LANDSCAPE" in switch:
+        fail("keep-awake switch must not be orientation-scoped")
     if "FLAG_KEEP_SCREEN_ON" in switch:
         fail("DeskDisplaySwitch must not set a permanent Window keep-screen-on flag")
+
+    for layout in (RES / "layout" / "activity_main.xml", RES / "layout-land" / "activity_main.xml"):
+        text = layout.read_text(encoding="utf-8")
+        if "dev.eswink.aicontrolhud.DeskDisplaySwitch" not in text:
+            fail(f"{layout.relative_to(ROOT)} must expose the keep-awake switch")
+        if "@string/desk_display_keep_awake" not in text:
+            fail(f"{layout.relative_to(ROOT)} must label the keep-awake switch")
 
 
 def main() -> int:
@@ -173,10 +183,10 @@ def main() -> int:
     check_catalogs()
     check_activity()
     check_manifest_rotation()
-    check_desk_display_policy()
+    check_keep_awake_policy()
     print(
         "[android-ui-resources] PASS localized-resources=literals-free landscape=focus "
-        "lifecycle-guard=present desk-display=scoped"
+        "lifecycle-guard=present keep-awake=foreground-opt-in"
     )
     return 0
 
