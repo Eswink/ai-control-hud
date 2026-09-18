@@ -17,7 +17,7 @@ The Android client is deliberately conservative for an older device.
 
 ## Lifecycle and polling
 
-The Activity keeps the screen on while foregrounded. It polls `/api/v1/state` every two seconds after a successful response. Only one request may be in flight. Transport failures and server HTTP errors use exponential backoff capped at 30 seconds. Returning to the Activity restarts polling; leaving it stops scheduling new polls.
+By default the Activity follows normal Android screen-timeout policy. The user can enable **Keep screen on** from either portrait or landscape HUD; while that option is enabled, the visible foreground HUD requests `keepScreenOn`, and the request is cleared when the view leaves the window. The persisted setting is shared across orientations. It polls `/api/v1/state` every two seconds after a successful response. Only one request may be in flight. Transport failures and server HTTP errors use exponential backoff capped at 30 seconds. Returning to the Activity restarts polling; leaving it stops scheduling new polls.
 
 An unsupported `schemaVersion` stops polling and presents a compatibility error rather than attempting to parse unknown semantics.
 
