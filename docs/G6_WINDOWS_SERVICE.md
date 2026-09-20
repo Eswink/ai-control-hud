@@ -94,6 +94,35 @@ To remove stored state too:
 
 The additive SYSTEM read ACEs on ZCode source paths are intentionally retained because the installer cannot safely distinguish pre-existing entries from entries it added.
 
+## Refresh ZCode sources after a storage-path change
+
+ZCode Desktop can move its effective data root after the Agent service has
+already been installed. The Windows service intentionally runs as LocalSystem,
+so it cannot safely rediscover the interactive user's profile by itself.
+
+Run the following from the current interactive user's elevated terminal after
+changing ZCode's **Data storage path**:
+
+```powershell
+.\ai-control-agent.exe service refresh-zcode
+```
+
+For a non-default machine config:
+
+```powershell
+.\ai-control-agent.exe service refresh-zcode --config "C:\path\to\agent.json"
+```
+
+The command resolves the current ZCode layout using the same root policy as
+foreground discovery, verifies that at least one current database exists,
+updates only the machine config's ZCode source paths, refreshes the minimum
+LocalSystem read/traverse ACLs, and restarts an already-running service. If the
+restart fails, it restores the previous machine config and attempts to return
+the old service to its prior running state.
+
+This operation does not modify ZCode data and does not re-import or replace the
+protected CommandCode credential.
+
 ## Transactional binary upgrade
 
 To update an already-installed Windows Agent, run the **newly downloaded/validated** executable from outside the installed `Program Files` target:
