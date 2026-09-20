@@ -113,9 +113,45 @@ turn.started
     -> turn.completed | turn.failed | turn.cancelled
 ```
 
-A fresh unmatched `turn.started` is authoritative evidence that the session is still running. Events for the same open turn refresh its activity timestamp. A terminal event closes the turn and prevents an older `model_usage=running` row from resurrecting it. A later `turn.started` reopens the same session after pause/cancel/resume.
+A fresh unmatched `turn.started` is authoritative evidence that the session is still running. Events for the same open turn refresh its activity timestamp. A terminal event closes the foreground turn and prevents an older `model_usage=running` row from resurrecting it. A later `turn.started` reopens the same session after pause/cancel/resume.
 
-The default open-turn freshness window is 30 minutes and can be adjusted with `HUD_ZCODE_TURN_FRESH_SECONDS` (bounded to four hours). The log directory normally derives from the configured runtime DB (`.../cli/db/db.sqlite` -> `.../cli/log`) and can be overridden with `HUD_ZCODE_LOG_DIR` for interactive/non-service use.
+### ZCode 3.14 background workflows
+
+Current 3.14-era public protocol evidence adds a second session-scoped liveness
+signal: `session.updated` records carrying both `taskId` and `status` for a
+background task. The collector keeps those task IDs internal only; they are
+used as a bounded set of live markers for the parent session and are never
+emitted as top-level HUD task IDs.
+
+Consequences:
+
+- `running` / `waiting` / `queued` background statuses keep the parent
+  session live even after the foreground `turn.completed`;
+- completed/failed/cancelled/stopped background statuses remove only that
+  background marker;
+- a session becomes terminal only when its foreground turn is closed **and**
+  it has no live background markers;
+- the backend's automatic notification turn
+  `turn.started { inputSource: "background_task" }` stays attached to the
+  same parent session instead of creating another HUD task;
+- when a lagging Goal projection says completed/failed but fresh lifecycle
+  evidence says a background workflow is still live, lifecycle wins for
+  status while Goal metadata remains the title/workspace/activity enrichment.
+
+The reader accepts both the historical JSONL form with a top-level `event`
+field and the current typed envelope form with top-level `type` plus nested
+`payload`. Session ID and timestamp can be read from the top level or the
+verified nested compatibility form. Unknown task statuses do not fabricate
+liveness.
+
+This mapping is corroborated by current `william0wang/zcode-acp` protocol
+documentation/tests, which treats `session.updated {taskId,status}` as the
+background-task status channel and `inputSource:"background_task"` as the
+automatic completion-notification turn. `tizerluo/zcode-open-bridge` reports
+ZCode App 3.14.0 / CLI 0.16.9 still using the same
+`turn.started -> ... -> turn.completed/failed` session-event core.
+
+The default open-turn/background freshness window is 30 minutes and can be adjusted with `HUD_ZCODE_TURN_FRESH_SECONDS` (bounded to four hours). The log directory normally derives from the configured runtime DB (`.../cli/db/db.sqlite` -> `.../cli/log`) and can be overridden with `HUD_ZCODE_LOG_DIR` for interactive/non-service use.
 
 The JSONL reader consumes only event/session/timestamp metadata. Prompt/message bodies, tool payloads, credentials and headers are not exported.
 
