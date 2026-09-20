@@ -45,9 +45,14 @@ type Snapshot struct {
 	Summary domain.ZCodeSummary
 	Tasks   []domain.TaskSummary
 
-	// sessionIDs never leave the collector. They let us exclude the live
-	// session from the lagging task-index projection before merging history.
+	// sessionIDs never leave the collector. They let us exclude runtime-backed
+	// rows from the lagging task-index projection before merging history.
 	sessionIDs map[string]struct{}
+
+	// activeSessionIDs is narrower: only running/waiting source sessions belong
+	// here. A recent terminal Goal must not suppress a newer background/runtime
+	// lifecycle signal for the same ZCode session.
+	activeSessionIDs map[string]struct{}
 }
 
 type Collector struct {
@@ -112,7 +117,7 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		// Goal state is authoritative only for the exact Goal session. ZCode can
 		// run an independent ordinary turn at the same time, so always collect
 		// runtime sessions while excluding Goal-owned session IDs from that path.
-		runtime, _, runtimeErr := c.collectRuntimeSessionsExcluding(ctx, snapshotSessionIDs(goals))
+		runtime, _, runtimeErr := c.collectRuntimeSessionsExcluding(ctx, snapshotActiveSessionIDs(goals))
 		if runtimeErr != nil {
 			if goals == nil || len(goals.Tasks) == 0 {
 				return nil, runtimeErr
@@ -233,10 +238,14 @@ func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 	now := c.Now().UTC()
 	tasks := make([]domain.TaskSummary, 0, limit)
 	sessionIDs := make(map[string]struct{}, limit)
+	activeSessionIDs := make(map[string]struct{}, limit)
 	for _, row := range goalRows {
 		if task := c.goalTask(row, todos[row.SessionID], now); task != nil {
 			tasks = append(tasks, *task)
 			sessionIDs[row.SessionID] = struct{}{}
+			if task.Status == domain.TaskRunning || task.Status == domain.TaskWaiting {
+				activeSessionIDs[row.SessionID] = struct{}{}
+			}
 		}
 		if len(tasks) >= limit {
 			break
@@ -245,7 +254,12 @@ func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 	if len(tasks) == 0 {
 		return nil, true, nil
 	}
-	return &Snapshot{Summary: summarizeTasks(tasks), Tasks: tasks, sessionIDs: sessionIDs}, true, nil
+	return &Snapshot{
+		Summary:          summarizeTasks(tasks),
+		Tasks:            tasks,
+		sessionIDs:       sessionIDs,
+		activeSessionIDs: activeSessionIDs,
+	}, true, nil
 }
 
 func (c *Collector) goalTask(row goalRow, todos []todoRow, now time.Time) *domain.TaskSummary {
@@ -585,6 +599,13 @@ func mergeSnapshots(primary, secondary *Snapshot, limit int) *Snapshot {
 	for id := range secondary.sessionIDs {
 		result.sessionIDs[id] = struct{}{}
 	}
+	result.activeSessionIDs = make(map[string]struct{}, len(primary.activeSessionIDs)+len(secondary.activeSessionIDs))
+	for id := range primary.activeSessionIDs {
+		result.activeSessionIDs[id] = struct{}{}
+	}
+	for id := range secondary.activeSessionIDs {
+		result.activeSessionIDs[id] = struct{}{}
+	}
 	for _, task := range secondary.Tasks {
 		if len(result.Tasks) >= limit {
 			break
@@ -599,6 +620,13 @@ func snapshotSessionIDs(snapshot *Snapshot) map[string]struct{} {
 		return nil
 	}
 	return snapshot.sessionIDs
+}
+
+func snapshotActiveSessionIDs(snapshot *Snapshot) map[string]struct{} {
+	if snapshot == nil {
+		return nil
+	}
+	return snapshot.activeSessionIDs
 }
 
 func snapshotHasActiveTask(snapshot *Snapshot) bool {
