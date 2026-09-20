@@ -10,7 +10,7 @@ import (
 func TestProviderConfigEvidenceReturnsCountsOnlyForJSONC(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	secret := "PRIVATE-PROVIDER-KEY-MUST-NOT-LEAK"
-	body := "ï»¿{\n" +
+	body := "\xef\xbb\xbf{\n" +
 		" // comment\n" +
 		" \"provider\": {\n" +
 		"   \"one\": {\"options\": {\"apiKey\": \"" + secret + "\"}},\n" +
