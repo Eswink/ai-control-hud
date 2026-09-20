@@ -99,6 +99,22 @@ std::wstring SourceText(const Localization& locale, const std::wstring& value) {
     return std::wstring(locale.Get(TextId::Unknown));
 }
 
+std::wstring StorageSourceText(const Localization& locale, const std::wstring& value) {
+    if (value == L"default") return std::wstring(locale.Get(TextId::StorageDefault));
+    if (value == L"data_base_setting" || value == L"data_base_env") {
+        return std::wstring(locale.Get(TextId::StorageCustomData));
+    }
+    if (value == L"zcode_home" || value == L"hud_zcode_home") {
+        return std::wstring(locale.Get(TextId::StorageCustomRoot));
+    }
+    if (value == L"machine-config") return std::wstring(locale.Get(TextId::StorageMachineConfig));
+    return std::wstring(locale.Get(TextId::Unknown));
+}
+
+std::wstring ReadableText(const Localization& locale, bool readable) {
+    return std::wstring(locale.Get(readable ? TextId::Readable : TextId::Missing));
+}
+
 std::wstring TaskStatusText(const Localization& locale, const std::wstring& value) {
     if (value == L"running" || value == L"executing" || value == L"working" || value == L"active" || value == L"in_progress") {
         return std::wstring(locale.Get(TextId::Running));
@@ -550,7 +566,40 @@ void App::Draw() {
         DrawTextBlock(renderTarget_.Get(), localApi, bodyFormat_.Get(),
                       D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 28), accentBrush_.Get());
         rowY += 46.0f;
-        if (!snapshot.error.empty()) {
+        if (snapshot.zcodeStorage.available && rowY < agentRect.bottom - 120.0f) {
+            DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::ZCodeStorage), bodyFormat_.Get(),
+                          D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 28), primaryBrush_.Get());
+            rowY += 32.0f;
+            const std::wstring binding = std::wstring(localization_.Get(TextId::StorageBinding)) + L": " +
+                                         StorageSourceText(localization_, snapshot.zcodeStorage.layoutSource);
+            DrawTextBlock(renderTarget_.Get(), binding, smallFormat_.Get(),
+                          D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 24), secondaryBrush_.Get());
+            rowY += 26.0f;
+            const std::wstring runtimeDb = std::wstring(localization_.Get(TextId::RuntimeDatabase)) + L": " +
+                                           ReadableText(localization_, snapshot.zcodeStorage.runtimeDatabaseReadable);
+            DrawTextBlock(renderTarget_.Get(), runtimeDb, smallFormat_.Get(),
+                          D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 24),
+                          snapshot.zcodeStorage.runtimeDatabaseReadable ? successBrush_.Get() : warningBrush_.Get());
+            rowY += 26.0f;
+            const std::wstring taskIndex = std::wstring(localization_.Get(TextId::TaskIndex)) + L": " +
+                                           ReadableText(localization_, snapshot.zcodeStorage.taskIndexReadable);
+            DrawTextBlock(renderTarget_.Get(), taskIndex, smallFormat_.Get(),
+                          D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 24),
+                          snapshot.zcodeStorage.taskIndexReadable ? successBrush_.Get() : warningBrush_.Get());
+            rowY += 26.0f;
+            const std::wstring turnLog = std::wstring(localization_.Get(TextId::TurnLog)) + L": " +
+                                         ReadableText(localization_, snapshot.zcodeStorage.turnLogReadable);
+            DrawTextBlock(renderTarget_.Get(), turnLog, smallFormat_.Get(),
+                          D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 24),
+                          snapshot.zcodeStorage.turnLogReadable ? successBrush_.Get() : warningBrush_.Get());
+            rowY += 30.0f;
+            if (snapshot.zcodeStorage.refreshRecommended) {
+                DrawTextBlock(renderTarget_.Get(), localization_.Get(TextId::RefreshZCodeSources), bodyFormat_.Get(),
+                              D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, rowY + 30), warningBrush_.Get());
+                rowY += 36.0f;
+            }
+        }
+        if (!snapshot.error.empty() && rowY < agentRect.bottom - 20.0f) {
             (void)DrawTextFitted(renderTarget_.Get(), snapshot.error, smallFormat_.Get(),
                                  D2D1::RectF(agentRect.left + 20, rowY, agentRect.right - 20, agentRect.bottom - 20),
                                  errorBrush_.Get(), 6, true);

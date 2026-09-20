@@ -40,6 +40,14 @@ Diagnostics has its own version independent from state schema v1. `outbox` is an
       "schemaSupport": "supported"
     }
   },
+  "zcodeStorage": {
+    "bindingMode": "machine-config",
+    "layoutSource": "machine-config",
+    "runtimeDatabaseReadable": true,
+    "taskIndexReadable": true,
+    "turnLogReadable": true,
+    "refreshRecommended": false
+  },
   "outbox": {
     "status": "ok",
     "pendingEvents": 3,
@@ -74,6 +82,21 @@ All values above are synthetic examples.
 - `unsupported` — the current sanitized source failure is an explicit unsupported-schema/response failure;
 - `unknown` — the source is enabled but has not yet produced a success and is failing/waiting for a reason that does not establish schema compatibility;
 - `not-configured` — the source is disabled/not configured.
+
+## ZCode storage binding fields
+
+The optional `zcodeStorage` object is deliberately path-free:
+
+- `bindingMode`: `foreground` when the Agent resolved the current user's layout directly, or `machine-config` for a service using persisted source bindings;
+- `layoutSource`: a fixed enum-like label such as `default`, `data_base_setting`, `data_base_env`, `zcode_home`, `hud_zcode_home`, or `machine-config`;
+- `runtimeDatabaseReadable`: the bound runtime SQLite file can be opened read-only;
+- `taskIndexReadable`: the bound task-index SQLite file can be opened read-only;
+- `turnLogReadable`: the bound CLI log directory can be opened/read;
+- `refreshRecommended`: at least one configured database source is no longer readable.
+
+No source path is returned. For an installed Windows service, `refreshRecommended=true` is an operator signal to run `ai-control-agent.exe service refresh-zcode` from the interactive user's elevated terminal. The service does not attempt to infer that user's profile from LocalSystem.
+
+The interactive `doctor` command separately compares the current user's resolved ZCode layout with the persisted service binding and prints only `binding=current|different` plus the sanitized layout-source label. It does not send that comparison over HTTP.
 
 ## Durable outbox fields
 

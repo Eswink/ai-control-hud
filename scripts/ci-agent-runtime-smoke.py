@@ -66,6 +66,14 @@ def assert_diagnostics(base_url: str, private_root: Path) -> dict:
     if command_code.get("schemaSupport") != "not-configured":
         raise RuntimeError(f"unexpected commandcode diagnostics: {command_code!r}")
 
+    storage = diagnostics.get("zcodeStorage") or {}
+    if storage.get("bindingMode") != "foreground":
+        raise RuntimeError(f"unexpected ZCode storage binding: {storage!r}")
+    if not storage.get("runtimeDatabaseReadable") or not storage.get("taskIndexReadable"):
+        raise RuntimeError(f"synthetic ZCode sources not readable: {storage!r}")
+    if storage.get("refreshRecommended"):
+        raise RuntimeError(f"synthetic ZCode source refresh unexpectedly recommended: {storage!r}")
+
     serialized = json.dumps(diagnostics, ensure_ascii=False)
     if str(private_root) in serialized:
         raise RuntimeError("diagnostics leaked a private filesystem path")

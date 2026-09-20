@@ -27,6 +27,15 @@ type DiagnosticsSources struct {
 	CommandCode SourceDiagnostics `json:"commandCode"`
 }
 
+type ZCodeStorageDiagnostics struct {
+	BindingMode             string `json:"bindingMode"`
+	LayoutSource            string `json:"layoutSource"`
+	RuntimeDatabaseReadable bool   `json:"runtimeDatabaseReadable"`
+	TaskIndexReadable       bool   `json:"taskIndexReadable"`
+	TurnLogReadable         bool   `json:"turnLogReadable"`
+	RefreshRecommended      bool   `json:"refreshRecommended"`
+}
+
 type OutboxDiagnostics struct {
 	Status                  string `json:"status"`
 	PendingEvents           int    `json:"pendingEvents"`
@@ -43,6 +52,7 @@ type DiagnosticsResponse struct {
 	Version            string              `json:"version"`
 	Time               time.Time           `json:"time"`
 	UptimeSeconds      int64               `json:"uptimeSeconds"`
-	Sources            DiagnosticsSources  `json:"sources"`
-	Outbox             *OutboxDiagnostics  `json:"outbox,omitempty"`
+	Sources            DiagnosticsSources         `json:"sources"`
+	ZCodeStorage       *ZCodeStorageDiagnostics   `json:"zcodeStorage,omitempty"`
+	Outbox             *OutboxDiagnostics         `json:"outbox,omitempty"`
 }

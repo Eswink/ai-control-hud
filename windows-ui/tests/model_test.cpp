@@ -84,6 +84,11 @@ int main() {
     right = left;
     right.outbox.pendingEvents = 1;
     if (DisplayEquivalent(left, right)) return 10;
+    right = left;
+    right.zcodeStorage.available = true;
+    right.zcodeStorage.layoutSource = L"machine-config";
+    right.zcodeStorage.refreshRecommended = true;
+    if (DisplayEquivalent(left, right)) return 21;
 
     if (!UseStackedDashboard(662.0f)) return 13;
     if (UseStackedDashboard(1018.0f)) return 14;

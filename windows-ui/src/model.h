@@ -41,6 +41,16 @@ struct UsageWindowView {
     std::wstring resetAt;
 };
 
+struct ZCodeStorageView {
+    bool available{false};
+    std::wstring bindingMode;
+    std::wstring layoutSource;
+    bool runtimeDatabaseReadable{false};
+    bool taskIndexReadable{false};
+    bool turnLogReadable{false};
+    bool refreshRecommended{false};
+};
+
 struct OutboxView {
     bool available{false};
     std::wstring status;
@@ -65,6 +75,7 @@ struct DashboardSnapshot {
     std::vector<UsageWindowView> usageWindows;
     std::vector<TaskView> tasks;
     std::optional<std::int64_t> uptimeSeconds;
+    ZCodeStorageView zcodeStorage;
     OutboxView outbox;
 };
 
@@ -144,7 +155,15 @@ inline bool DisplayEquivalent(const DashboardSnapshot& left, const DashboardSnap
         left.commandCodeStatus != right.commandCodeStatus || left.plan != right.plan ||
         left.creditRemaining != right.creditRemaining || left.creditLimit != right.creditLimit ||
         left.creditUnit != right.creditUnit || left.usageWindows.size() != right.usageWindows.size() ||
-        left.tasks.size() != right.tasks.size() || left.outbox.available != right.outbox.available ||
+        left.tasks.size() != right.tasks.size() ||
+        left.zcodeStorage.available != right.zcodeStorage.available ||
+        left.zcodeStorage.bindingMode != right.zcodeStorage.bindingMode ||
+        left.zcodeStorage.layoutSource != right.zcodeStorage.layoutSource ||
+        left.zcodeStorage.runtimeDatabaseReadable != right.zcodeStorage.runtimeDatabaseReadable ||
+        left.zcodeStorage.taskIndexReadable != right.zcodeStorage.taskIndexReadable ||
+        left.zcodeStorage.turnLogReadable != right.zcodeStorage.turnLogReadable ||
+        left.zcodeStorage.refreshRecommended != right.zcodeStorage.refreshRecommended ||
+        left.outbox.available != right.outbox.available ||
         left.outbox.status != right.outbox.status || left.outbox.pendingEvents != right.outbox.pendingEvents ||
         left.outbox.taskBaselineRows != right.outbox.taskBaselineRows ||
         left.outbox.compactedTaskRows != right.outbox.compactedTaskRows) {

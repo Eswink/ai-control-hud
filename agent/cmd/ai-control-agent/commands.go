@@ -20,6 +20,7 @@ import (
 	"github.com/Eswink/ai-control-hud/agent/internal/platform/winservice"
 	agentruntime "github.com/Eswink/ai-control-hud/agent/internal/runtime"
 	"github.com/Eswink/ai-control-hud/agent/internal/store"
+	"github.com/Eswink/ai-control-hud/agent/internal/zcodepath"
 )
 
 const (
@@ -310,6 +311,20 @@ func runDoctor(args []string) error {
 	}
 	fmt.Printf("[doctor] config=ok path=%s listen=%s\n", resolved, config.Listen)
 
+	if layout, layoutErr := zcodepath.Resolve(); layoutErr == nil {
+		binding := "current"
+		if !strings.EqualFold(config.ZCodeRuntimeDB, layout.RuntimeDB) ||
+			!strings.EqualFold(config.ZCodeTaskIndexDB, layout.TaskIndexDB) {
+			binding = "different"
+		}
+		fmt.Printf("[doctor] zcode-layout source=%s binding=%s\n", sanitizeBindingLabel(layout.Source, "unknown"), binding)
+		if binding == "different" {
+			fmt.Println("[doctor] zcode-refresh=recommended command=service refresh-zcode")
+		}
+	} else {
+		fmt.Println("[doctor] zcode-layout source=unknown binding=unknown")
+	}
+
 	zcodeReadable := false
 	if config.ZCodeRuntimeDB != "" && fileExists(config.ZCodeRuntimeDB) {
 		zcodeReadable = true
@@ -392,7 +407,23 @@ func runConfigured(ctx context.Context, configPath string) error {
 		},
 		agentruntime.DefaultConfig(),
 	)
-	return serve(ctx, config.Listen, false, true, true, started, snapshotStore, collectorLoop)
+	return serve(
+		ctx,
+		config.Listen,
+		false,
+		true,
+		true,
+		started,
+		snapshotStore,
+		collectorLoop,
+		zcodeStorageDiagnosticsProvider(
+			"machine-config",
+			"machine-config",
+			zCollector.RuntimeDB,
+			zCollector.TaskIndexDB,
+			zCollector.LogDir,
+		),
+	)
 }
 
 func providerFromSecret(record secretstore.Record) *commandcode.Provider {
