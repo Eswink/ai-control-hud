@@ -189,6 +189,32 @@ The pause/resume and ordinary-turn rules were cross-checked against public ZCode
 
 These are corroborating public implementations/protocol observations, not an assumption that third-party code is authoritative for every ZCode release.
 
+## Privacy-safe compatibility evidence
+
+When ZCode changes, the interactive user can capture a bounded compatibility
+report without sharing prompts, session IDs, credentials or filesystem paths:
+
+```powershell
+.\ai-control-agent.exe zcode evidence
+```
+
+The JSON report contains only:
+
+- the sanitized layout-resolution source;
+- presence/readability and known-schema capability booleans for the runtime DB
+  and task index;
+- at most the same two newest / 512 KiB-per-file turn-log window already used
+  by the production collector;
+- bounded event-name counts whose keys match `[A-Za-z0-9._-]{1,64}`;
+- counts of `session.updated` records carrying task/status metadata and
+  `turn.started` records marked `inputSource=background_task`;
+- provider-config candidate/readable counts, never provider contents.
+
+Unknown/unsafe event names are counted only as `otherEventRecords`. Payload
+text, task IDs, session IDs, full paths, provider URLs and keys are never
+serialized. This command is intended to freeze a new ZCode compatibility
+baseline before collector semantics are changed.
+
 ## Target-machine validation
 
 The live HUD API was previously compared with the running ZCode Desktop Goal panel and correctly resolved Goal title, workspace, current cycle/todo activity and fresh-heartbeat liveness. A later target-machine report exposed two additional real-world cases now covered by the collector rules above: a paused/resumed active Goal whose todo projection remained pending, and recent completed task-index history being hidden while a Goal was live.

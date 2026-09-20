@@ -43,6 +43,8 @@ func run(args []string) error {
 			return runConfigCommand(args[1:])
 		case "commandcode":
 			return runCommandCodeCommand(args[1:])
+		case "zcode":
+			return runZCodeCommand(args[1:])
 		case "hub":
 			return runHubCommand(args[1:])
 		case "service":
