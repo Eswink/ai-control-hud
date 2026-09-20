@@ -19,10 +19,11 @@ const (
 )
 
 type turnLogState struct {
-	Open            bool
-	StartedAt       time.Time
-	UpdatedAt       time.Time
-	BackgroundTasks map[string]struct{}
+	Open                 bool
+	StartedAt            time.Time
+	UpdatedAt            time.Time
+	BackgroundTasks      map[string]struct{}
+	BackgroundTrackCount int
 }
 
 func defaultLogDir(runtimeDB string) string {
@@ -101,7 +102,7 @@ func (c *Collector) readTurnStates() (map[string]turnLogState, error) {
 			state := states[sessionID]
 			switch eventName {
 			case "turn.started":
-				alreadyActive := state.Open || len(state.BackgroundTasks) > 0
+				alreadyActive := state.Open || len(state.BackgroundTasks) > 0 || state.BackgroundTrackCount > 0
 				state.Open = true
 				if !alreadyActive || state.StartedAt.IsZero() {
 					state.StartedAt = timestamp
@@ -116,7 +117,7 @@ func (c *Collector) readTurnStates() (map[string]turnLogState, error) {
 				taskID := nestedString(root, "taskId")
 				status := nestedString(root, "status")
 				if taskID != "" && status != "" {
-					wasActive := state.Open || len(state.BackgroundTasks) > 0
+					wasActive := state.Open || len(state.BackgroundTasks) > 0 || state.BackgroundTrackCount > 0
 					switch backgroundTaskStatus(status) {
 					case backgroundTaskRunning:
 						if state.BackgroundTasks == nil {
@@ -133,12 +134,35 @@ func (c *Collector) readTurnStates() (map[string]turnLogState, error) {
 						}
 						state.UpdatedAt = timestamp
 					}
-				} else if state.Open || len(state.BackgroundTasks) > 0 {
+				} else if state.Open || len(state.BackgroundTasks) > 0 || state.BackgroundTrackCount > 0 {
+					state.UpdatedAt = timestamp
+				}
+
+			case "background_task.tracking.started":
+				wasActive := state.Open || len(state.BackgroundTasks) > 0 || state.BackgroundTrackCount > 0
+				if state.BackgroundTrackCount < 1024 {
+					state.BackgroundTrackCount++
+				}
+				if !wasActive || state.StartedAt.IsZero() {
+					state.StartedAt = timestamp
+				}
+				state.UpdatedAt = timestamp
+
+			case "background_task.tracking.terminal":
+				if state.BackgroundTrackCount > 0 {
+					state.BackgroundTrackCount--
+				}
+				state.UpdatedAt = timestamp
+
+			case "background_task.notification.enqueued", "background_task.notification.runtime_enqueued":
+				// Notification queueing is post-task delivery bookkeeping. It is
+				// intentionally not treated as live work.
+				if state.Open || len(state.BackgroundTasks) > 0 || state.BackgroundTrackCount > 0 {
 					state.UpdatedAt = timestamp
 				}
 
 			default:
-				if state.Open || len(state.BackgroundTasks) > 0 {
+				if state.Open || len(state.BackgroundTasks) > 0 || state.BackgroundTrackCount > 0 {
 					if state.UpdatedAt.IsZero() || timestamp.After(state.UpdatedAt) {
 						state.UpdatedAt = timestamp
 					}
@@ -210,7 +234,7 @@ func logTimestamp(root map[string]json.RawMessage) (time.Time, bool) {
 }
 
 func (state turnLogState) active(now time.Time, freshSeconds int) bool {
-	if (!state.Open && len(state.BackgroundTasks) == 0) || state.UpdatedAt.IsZero() {
+	if (!state.Open && len(state.BackgroundTasks) == 0 && state.BackgroundTrackCount == 0) || state.UpdatedAt.IsZero() {
 		return false
 	}
 	freshSeconds = bounded(freshSeconds, 1800, 4*3600)
