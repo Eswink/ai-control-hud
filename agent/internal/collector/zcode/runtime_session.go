@@ -89,7 +89,12 @@ func (c *Collector) collectRuntimeSessionsExcluding(ctx context.Context, exclude
 		seen[active.SessionID] = struct{}{}
 		sessionIDs[active.SessionID] = struct{}{}
 		if len(tasks) >= limit {
-			return &Snapshot{Summary: summarizeTasks(tasks), Tasks: tasks, sessionIDs: sessionIDs}, true, nil
+			return &Snapshot{
+				Summary:          summarizeTasks(tasks),
+				Tasks:            tasks,
+				sessionIDs:       sessionIDs,
+				activeSessionIDs: sessionIDs,
+			}, true, nil
 		}
 	}
 
@@ -158,7 +163,12 @@ func (c *Collector) collectRuntimeSessionsExcluding(ctx context.Context, exclude
 	if len(tasks) == 0 {
 		return nil, true, nil
 	}
-	return &Snapshot{Summary: summarizeTasks(tasks), Tasks: tasks, sessionIDs: sessionIDs}, true, nil
+	return &Snapshot{
+				Summary:          summarizeTasks(tasks),
+				Tasks:            tasks,
+				sessionIDs:       sessionIDs,
+				activeSessionIDs: sessionIDs,
+			}, true, nil
 }
 
 func loadRuntimeSessionMeta(ctx context.Context, db *sql.DB, sessionID string) (runtimeSessionMeta, bool, error) {
