@@ -138,3 +138,18 @@ func assertPath(t *testing.T, actual, expected string) {
 		t.Fatalf("path=%q expected=%q", actual, expected)
 	}
 }
+
+
+func TestDecodeJSONCPreservesCommentMarkersInsideStrings(t *testing.T) {
+	var got struct {
+		URL  string `json:"url"`
+		Name string `json:"name"`
+	}
+	data := []byte("﻿{\n // comment\n \"url\": \"https://example.test/a//b\", /* block */\n \"name\": \"x/*literal*/y\"\n}")
+	if err := DecodeJSONC(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.URL != "https://example.test/a//b" || got.Name != "x/*literal*/y" {
+		t.Fatalf("decoded JSONC = %#v", got)
+	}
+}
