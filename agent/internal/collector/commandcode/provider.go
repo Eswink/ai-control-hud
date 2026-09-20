@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Eswink/ai-control-hud/agent/internal/zcodepath"
 )
 
 type Provider struct {
@@ -40,17 +42,11 @@ type rawConfig struct {
 }
 
 func DefaultConfigPaths() []string {
-	if configured := strings.TrimSpace(os.Getenv("HUD_ZCODE_CONFIG")); configured != "" {
-		return []string{expandHome(configured)}
-	}
-	home, err := os.UserHomeDir()
+	layout, err := zcodepath.Resolve()
 	if err != nil {
 		return nil
 	}
-	return []string{
-		filepath.Join(home, ".zcode", "v2", "config.json"),
-		filepath.Join(home, ".zcode", "cli", "config.json"),
-	}
+	return append([]string(nil), layout.ProviderConfigPaths...)
 }
 
 func LoadProvider(path, explicitProviderID string) (*Provider, error) {
