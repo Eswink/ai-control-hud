@@ -54,7 +54,7 @@ func TestCompatibilityEvidenceIsBoundedAndDoesNotExposePrivatePayloads(t *testin
 	collector := New(runtimeDB, taskDB)
 	collector.LogDir = logDir
 	evidence := collector.CollectCompatibilityEvidence(context.Background())
-	if evidence.EvidenceVersion != 1 {
+	if evidence.EvidenceVersion != 2 {
 		t.Fatalf("version=%d", evidence.EvidenceVersion)
 	}
 	if !evidence.RuntimeDatabasePresent || !evidence.RuntimeDatabaseReadable ||
@@ -147,5 +147,36 @@ func TestCompatibilityEvidenceDoesNotWriteSourceFiles(t *testing.T) {
 	}
 	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
 		t.Fatalf("evidence probe modified log file")
+	}
+}
+
+
+func TestCompatibilityEvidenceCountsZCode314TrackingSessionLinkage(t *testing.T) {
+	logDir := t.TempDir()
+	writeTurnLog(t, logDir,
+		`{"event":"background_task.tracking.started","sessionId":"private-session","timestamp":"2026-09-20T10:00:00Z","context":{"taskId":"private-task","command":"PRIVATE"}}`,
+		`{"event":"background_task.tracking.terminal","context":{"sessionId":"private-session","timestamp":"2026-09-20T10:00:05Z","taskId":"private-task","result":"PRIVATE"}}`,
+		`{"event":"background_task.tracking.started","timestamp":"2026-09-20T10:00:10Z"}`,
+	)
+
+	collector := New("", "")
+	collector.LogDir = logDir
+	evidence := collector.CollectCompatibilityEvidence(context.Background())
+	if evidence.BackgroundTrackingStarts != 2 ||
+		evidence.BackgroundTrackingTerminals != 1 ||
+		evidence.BackgroundTrackingStartLinked != 1 ||
+		evidence.BackgroundTrackingTerminalLinked != 1 {
+		t.Fatalf("tracking evidence=%+v", evidence)
+	}
+
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, private := range []string{"private-session", "private-task", "PRIVATE"} {
+		if strings.Contains(text, private) {
+			t.Fatalf("tracking evidence leaked %q: %s", private, text)
+		}
 	}
 }
