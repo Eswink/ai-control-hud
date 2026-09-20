@@ -31,7 +31,7 @@ const (
 
 func runServiceCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("service command required: install, start, stop, restart, status, remove, run")
+		return errors.New("service command required: install, start, stop, restart, refresh-zcode, status, remove, run")
 	}
 	switch args[0] {
 	case "install":
@@ -54,6 +54,8 @@ func runServiceCommand(args []string) error {
 		}
 		fmt.Println("[service] state=running")
 		return nil
+	case "refresh-zcode":
+		return serviceRefreshZCode(args[1:])
 	case "status":
 		info, err := winservice.Status(windowsServiceName)
 		if err != nil {
@@ -174,6 +176,64 @@ func serviceInstall(args []string) error {
 	} else {
 		fmt.Println("[service] existing Windows DPAPI SecretStore reused; plaintext provider import is not required")
 	}
+	return nil
+}
+
+func serviceRefreshZCode(args []string) error {
+	flags := flag.NewFlagSet("service refresh-zcode", flag.ContinueOnError)
+	defaultConfig, err := machineconfig.DefaultPath()
+	if err != nil {
+		return err
+	}
+	configPath := flags.String("config", defaultConfig, "machine configuration path")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	resolvedConfig := absolute(*configPath)
+	original, err := machineconfig.Load(resolvedConfig)
+	if err != nil {
+		return fmt.Errorf("load machine config: %w", err)
+	}
+	runtimeDB, taskIndexDB, err := zcode.ResolvedPaths()
+	if err != nil {
+		return fmt.Errorf("resolve current ZCode sources: %w", err)
+	}
+	if !fileExists(runtimeDB) && !fileExists(taskIndexDB) {
+		return errors.New("no readable ZCode database found at the current storage root")
+	}
+
+	updated := original
+	updated.ZCodeRuntimeDB = absolute(runtimeDB)
+	updated.ZCodeTaskIndexDB = absolute(taskIndexDB)
+	changed := !strings.EqualFold(original.ZCodeRuntimeDB, updated.ZCodeRuntimeDB) ||
+		!strings.EqualFold(original.ZCodeTaskIndexDB, updated.ZCodeTaskIndexDB)
+	if !changed {
+		if err := machineconfig.PrepareSourceAccess(updated); err != nil {
+			return err
+		}
+		fmt.Println("[service] zcode-sources refreshed changed=false")
+		return nil
+	}
+
+	info, statusErr := winservice.Status(windowsServiceName)
+	if statusErr != nil && !errors.Is(statusErr, winservice.ErrUnsupported) {
+		return statusErr
+	}
+	if err := machineconfig.Save(resolvedConfig, updated); err != nil {
+		return err
+	}
+
+	if statusErr == nil && info.Installed && info.State == "running" {
+		if err := winservice.Restart(windowsServiceName); err != nil {
+			rollbackErr := machineconfig.Save(resolvedConfig, original)
+			restartErr := winservice.Start(windowsServiceName)
+			return fmt.Errorf("restart service after ZCode source rebind: %w; config rollback: %v; old service restart: %v", err, rollbackErr, restartErr)
+		}
+	}
+	fmt.Println("[service] zcode-sources refreshed changed=true")
+	fmt.Printf("[service] zcode-runtime=%s\n", updated.ZCodeRuntimeDB)
+	fmt.Printf("[service] zcode-task-index=%s\n", updated.ZCodeTaskIndexDB)
 	return nil
 }
 
