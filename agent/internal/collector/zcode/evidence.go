@@ -3,7 +3,6 @@ package zcode
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -191,6 +190,3 @@ func rawString(raw json.RawMessage) string {
 	return strings.TrimSpace(value)
 }
 
-// keep database/sql referenced here so future capability expansion does not
-// accidentally re-open a second connection type through another helper.
-var _ *sql.DB
