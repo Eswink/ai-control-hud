@@ -117,39 +117,57 @@ A fresh unmatched `turn.started` is authoritative evidence that the session is s
 
 ### ZCode 3.14 background workflows
 
-Current 3.14-era public protocol evidence adds a second session-scoped liveness
-signal: `session.updated` records carrying both `taskId` and `status` for a
-background task. The collector keeps those task IDs internal only; they are
-used as a bounded set of live markers for the parent session and are never
-emitted as top-level HUD task IDs.
+Target-machine evidence captured on 2026-09-20 shows that current ZCode 3.14
+CLI JSONL uses a lower-level structured-log lifecycle for background jobs:
+
+```text
+background_task.tracking.started
+    -> background task work
+    -> background_task.tracking.terminal
+
+background_task.notification.enqueued
+background_task.notification.runtime_enqueued
+```
+
+The first pair is session-scoped liveness. The notification events are delivery
+bookkeeping after/around task completion and are **not** treated as running
+work by themselves.
+
+The collector therefore combines two compatibility families:
+
+1. current real structured-log `background_task.tracking.started|terminal`
+   events, tracked as a bounded per-session open-count;
+2. the previously observed protocol-compatible
+   `session.updated {taskId,status}` / `turn.started
+   {inputSource:"background_task"}` family, retained as a compatibility path.
 
 Consequences:
 
-- `running` / `waiting` / `queued` background statuses keep the parent
-  session live even after the foreground `turn.completed`;
-- completed/failed/cancelled/stopped background statuses remove only that
-  background marker;
-- a session becomes terminal only when its foreground turn is closed **and**
-  it has no live background markers;
-- the backend's automatic notification turn
-  `turn.started { inputSource: "background_task" }` stays attached to the
-  same parent session instead of creating another HUD task;
+- each tracking start increments the parent session's live background count;
+- each tracking terminal decrements it without affecting another concurrent
+  background job;
+- the parent session remains running after a foreground `turn.completed`
+  while the background count is non-zero;
+- notification enqueue events never fabricate liveness on an otherwise idle
+  session;
+- sub-agent/background identities remain internal and do not become top-level
+  HUD tasks;
 - when a lagging Goal projection says completed/failed but fresh lifecycle
-  evidence says a background workflow is still live, lifecycle wins for
-  status while Goal metadata remains the title/workspace/activity enrichment.
+  evidence says background work is still live, lifecycle wins for status while
+  Goal metadata remains the title/workspace/activity enrichment.
 
-The reader accepts both the historical JSONL form with a top-level `event`
-field and the current typed envelope form with top-level `type` plus nested
-`payload`. Session ID and timestamp can be read from the top level or the
-verified nested compatibility form. Unknown task statuses do not fabricate
-liveness.
+The reader accepts historical JSONL with top-level `event`, current typed
+envelopes with top-level `type`, and verified nested `payload`/`context`
+session/timestamp placement.
 
-This mapping is corroborated by current `william0wang/zcode-acp` protocol
-documentation/tests, which treats `session.updated {taskId,status}` as the
-background-task status channel and `inputSource:"background_task"` as the
-automatic completion-notification turn. `tizerluo/zcode-open-bridge` reports
-ZCode App 3.14.0 / CLI 0.16.9 still using the same
-`turn.started -> ... -> turn.completed/failed` session-event core.
+This mapping is corroborated by the target machine itself and by current public
+reverse-engineering in `Mnehmos/mnehmos.zcode.mcp`, which documents
+`background_task.tracking.started|terminal`,
+`background_task.notification.enqueued|runtime_enqueued`, the
+`session/cancelBackgroundTask` control surface, and a session projection
+containing `backgroundJobs[]`. `william0wang/zcode-acp` and
+`tizerluo/zcode-open-bridge` remain useful corroboration for the higher-level
+session-event compatibility family.
 
 The default open-turn/background freshness window is 30 minutes and can be adjusted with `HUD_ZCODE_TURN_FRESH_SECONDS` (bounded to four hours). The log directory normally derives from the configured runtime DB (`.../cli/db/db.sqlite` -> `.../cli/log`) and can be overridden with `HUD_ZCODE_LOG_DIR` for interactive/non-service use.
 
@@ -244,6 +262,9 @@ The JSON report contains only:
 - bounded event-name counts whose keys match `[A-Za-z0-9._-]{1,64}`;
 - counts of `session.updated` records carrying task/status metadata and
   `turn.started` records marked `inputSource=background_task`;
+- counts of real 3.14 `background_task.tracking.started|terminal` records plus
+  how many of those records contain a parseable session link; raw session IDs
+  are never serialized;
 - provider-config candidate/readable/parseable counts plus the total number of provider entries found, never provider IDs, URLs, keys or other provider contents.
 
 Unknown/unsafe event names are counted only as `otherEventRecords`. Payload
@@ -253,7 +274,32 @@ baseline before collector semantics are changed.
 
 ## Target-machine validation
 
-The live HUD API was previously compared with the running ZCode Desktop Goal panel and correctly resolved Goal title, workspace, current cycle/todo activity and fresh-heartbeat liveness. A later target-machine report exposed two additional real-world cases now covered by the collector rules above: a paused/resumed active Goal whose todo projection remained pending, and recent completed task-index history being hidden while a Goal was live.
+The live HUD API was previously compared with the running ZCode Desktop Goal
+panel and correctly resolved Goal title, workspace, current cycle/todo activity
+and fresh-heartbeat liveness. Later target-machine reports exposed paused/resumed
+Goal projection lag and hidden recent history; both are covered by regression
+tests.
+
+A 2026-09-20 ZCode 3.14 field capture from a custom `dataBaseDir` further
+confirmed:
+
+- `layoutSource=data_base_setting`;
+- runtime DB, task index and turn-log directory all readable;
+- Goal/runtime/task-index schemas compatible;
+- two bounded turn-log files parsed successfully (1,315/1,315 records);
+- real background event vocabulary:
+  `background_task.tracking.started=2`,
+  `background_task.tracking.terminal=2`,
+  `background_task.notification.enqueued=2`, and
+  `background_task.notification.runtime_enqueued=2`;
+- provider candidates were visible across split roots
+  (3 readable, 2 parseable, 19 provider entries);
+- canonical state reported one running task plus two recent completed tasks.
+
+That capture also showed zero `session.updated` task signals and zero
+`inputSource=background_task` turn starts, which is why the production
+collector now consumes the real structured-log tracking pair instead of relying
+only on the earlier compatibility family.
 
 ## Provider/model evidence
 
