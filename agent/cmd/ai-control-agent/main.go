@@ -19,6 +19,7 @@ import (
 	"github.com/Eswink/ai-control-hud/agent/internal/mock"
 	agentruntime "github.com/Eswink/ai-control-hud/agent/internal/runtime"
 	"github.com/Eswink/ai-control-hud/agent/internal/store"
+	"github.com/Eswink/ai-control-hud/agent/internal/zcodepath"
 )
 
 var version = "0.3.0-go-dev"
@@ -84,7 +85,8 @@ func runForeground(args []string) error {
 		initial       domain.HudState
 		collectorLoop *agentruntime.Runtime
 		zEnabled      bool
-		ccEnabled     bool
+		ccEnabled               bool
+		zcodeStorageDiagnostics func() domain.ZCodeStorageDiagnostics
 	)
 
 	if *fixture != "" {
@@ -102,6 +104,17 @@ func runForeground(args []string) error {
 		var zCollect agentruntime.ZCodeCollectFunc
 		if zCollector != nil {
 			zCollect = zCollector.Collect
+			layoutSource := "unknown"
+			if layout, layoutErr := zcodepath.Resolve(); layoutErr == nil {
+				layoutSource = layout.Source
+			}
+			zcodeStorageDiagnostics = zcodeStorageDiagnosticsProvider(
+				"foreground",
+				layoutSource,
+				zCollector.RuntimeDB,
+				zCollector.TaskIndexDB,
+				zCollector.LogDir,
+			)
 		}
 		var ccCollect agentruntime.CommandCodeCollectFunc
 		if ccCollector != nil {
@@ -113,14 +126,14 @@ func runForeground(args []string) error {
 			return fmt.Errorf("initialize snapshot store: %w", err)
 		}
 		collectorLoop = agentruntime.New(snapshotStore, zCollect, ccCollect, agentruntime.DefaultConfig())
-		return serve(ctx, *listen, false, zEnabled, ccEnabled, started, snapshotStore, collectorLoop)
+		return serve(ctx, *listen, false, zEnabled, ccEnabled, started, snapshotStore, collectorLoop, zcodeStorageDiagnostics)
 	}
 
 	snapshotStore, err := store.New(initial)
 	if err != nil {
 		return fmt.Errorf("initialize snapshot store: %w", err)
 	}
-	return serve(ctx, *listen, true, false, false, started, snapshotStore, nil)
+	return serve(ctx, *listen, true, false, false, started, snapshotStore, nil, nil)
 }
 
 func serve(
@@ -132,6 +145,7 @@ func serve(
 	started time.Time,
 	snapshotStore *store.SnapshotStore,
 	collectorLoop *agentruntime.Runtime,
+	zcodeStorageDiagnostics func() domain.ZCodeStorageDiagnostics,
 ) error {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
@@ -140,6 +154,9 @@ func serve(
 	defer listener.Close()
 
 	apiServer := apihttp.New(snapshotStore, version, started)
+	if zcodeStorageDiagnostics != nil {
+		apiServer.SetZCodeStorageDiagnosticsProvider(zcodeStorageDiagnostics)
+	}
 	httpServer := &http.Server{
 		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
