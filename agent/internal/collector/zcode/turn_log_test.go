@@ -228,3 +228,108 @@ func TestTurnLogReadsNestedSessionAndTimestampEnvelope(t *testing.T) {
 		t.Fatalf("nested envelope was not parsed: %+v", state)
 	}
 }
+
+
+func TestTurnLogZCode314TrackingEventsKeepParentSessionLive(t *testing.T) {
+	now := time.Date(2026, 9, 20, 11, 0, 0, 0, time.UTC)
+	logDir := t.TempDir()
+	writeTurnLog(t, logDir,
+		turnLine("background_task.tracking.started", "session-bg", now.Add(-90*time.Second)),
+		turnLine("background_task.notification.enqueued", "session-bg", now.Add(-70*time.Second)),
+		turnLine("background_task.notification.runtime_enqueued", "session-bg", now.Add(-60*time.Second)),
+	)
+
+	collector := New("", "")
+	collector.LogDir = logDir
+	states, err := collector.readTurnStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := states["session-bg"]
+	if state.BackgroundTrackCount != 1 || !state.active(now, 1800) {
+		t.Fatalf("tracking start did not keep session active: %+v", state)
+	}
+	if !state.StartedAt.Equal(now.Add(-90 * time.Second)) {
+		t.Fatalf("tracking start time=%s", state.StartedAt)
+	}
+	if !state.UpdatedAt.Equal(now.Add(-60 * time.Second)) {
+		t.Fatalf("notification did not refresh already-live session: %+v", state)
+	}
+}
+
+func TestTurnLogZCode314TrackingTerminalClosesOnlyAfterAllStarts(t *testing.T) {
+	now := time.Date(2026, 9, 20, 11, 0, 0, 0, time.UTC)
+	logDir := t.TempDir()
+	writeTurnLog(t, logDir,
+		turnLine("background_task.tracking.started", "session-bg", now.Add(-4*time.Minute)),
+		turnLine("background_task.tracking.started", "session-bg", now.Add(-3*time.Minute)),
+		turnLine("background_task.tracking.terminal", "session-bg", now.Add(-2*time.Minute)),
+	)
+
+	collector := New("", "")
+	collector.LogDir = logDir
+	states, err := collector.readTurnStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := states["session-bg"]
+	if state.BackgroundTrackCount != 1 || !state.active(now, 1800) {
+		t.Fatalf("first terminal closed too much: %+v", state)
+	}
+
+	writeTurnLog(t, logDir,
+		turnLine("background_task.tracking.started", "session-bg", now.Add(-4*time.Minute)),
+		turnLine("background_task.tracking.started", "session-bg", now.Add(-3*time.Minute)),
+		turnLine("background_task.tracking.terminal", "session-bg", now.Add(-2*time.Minute)),
+		turnLine("background_task.tracking.terminal", "session-bg", now.Add(-time.Minute)),
+	)
+	states, err = collector.readTurnStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = states["session-bg"]
+	if state.BackgroundTrackCount != 0 || state.active(now, 1800) {
+		t.Fatalf("balanced tracking lifecycle remained active: %+v", state)
+	}
+}
+
+func TestTurnLogZCode314NotificationsDoNotFabricateLiveness(t *testing.T) {
+	now := time.Date(2026, 9, 20, 11, 0, 0, 0, time.UTC)
+	logDir := t.TempDir()
+	writeTurnLog(t, logDir,
+		turnLine("background_task.notification.enqueued", "session-idle", now.Add(-20*time.Second)),
+		turnLine("background_task.notification.runtime_enqueued", "session-idle", now.Add(-10*time.Second)),
+	)
+
+	collector := New("", "")
+	collector.LogDir = logDir
+	states, err := collector.readTurnStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := states["session-idle"]
+	if state.BackgroundTrackCount != 0 || state.Open || state.active(now, 1800) {
+		t.Fatalf("notification queue fabricated live state: %+v", state)
+	}
+}
+
+func TestTurnLogZCode314TrackingSurvivesForegroundTerminal(t *testing.T) {
+	now := time.Date(2026, 9, 20, 11, 0, 0, 0, time.UTC)
+	logDir := t.TempDir()
+	writeTurnLog(t, logDir,
+		turnLine("turn.started", "session-parent", now.Add(-5*time.Minute)),
+		turnLine("background_task.tracking.started", "session-parent", now.Add(-4*time.Minute)),
+		turnLine("turn.completed", "session-parent", now.Add(-3*time.Minute)),
+	)
+
+	collector := New("", "")
+	collector.LogDir = logDir
+	states, err := collector.readTurnStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := states["session-parent"]
+	if state.Open || state.BackgroundTrackCount != 1 || !state.active(now, 1800) {
+		t.Fatalf("foreground terminal erased background work: %+v", state)
+	}
+}
