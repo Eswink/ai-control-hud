@@ -116,12 +116,13 @@ func (c *Collector) readTurnStates() (map[string]turnLogState, error) {
 				taskID := nestedString(root, "taskId")
 				status := nestedString(root, "status")
 				if taskID != "" && status != "" {
+					wasActive := state.Open || len(state.BackgroundTasks) > 0
 					switch backgroundTaskStatus(status) {
 					case backgroundTaskRunning:
 						if state.BackgroundTasks == nil {
 							state.BackgroundTasks = map[string]struct{}{}
 						}
-						if !state.Open && len(state.BackgroundTasks) == 0 && state.StartedAt.IsZero() {
+						if !wasActive {
 							state.StartedAt = timestamp
 						}
 						state.BackgroundTasks[taskID] = struct{}{}
