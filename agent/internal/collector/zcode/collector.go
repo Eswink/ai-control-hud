@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Eswink/ai-control-hud/agent/internal/domain"
+	"github.com/Eswink/ai-control-hud/agent/internal/zcodepath"
 	_ "modernc.org/sqlite"
 )
 
@@ -77,17 +78,17 @@ func New(runtimeDB, taskIndexDB string) *Collector {
 }
 
 func NewFromEnvironment() (*Collector, bool) {
-	home, err := os.UserHomeDir()
+	layout, err := zcodepath.Resolve()
 	if err != nil {
 		return nil, false
 	}
-	runtimeDB := envOr("HUD_ZCODE_RUNTIME_DB", filepath.Join(home, ".zcode", "cli", "db", "db.sqlite"))
-	taskIndexDB := envOr("HUD_ZCODE_DB", filepath.Join(home, ".zcode", "v2", "tasks-index.sqlite"))
+	runtimeDB := layout.RuntimeDB
+	taskIndexDB := layout.TaskIndexDB
 	if !fileExists(runtimeDB) && !fileExists(taskIndexDB) {
 		return nil, false
 	}
 	collector := New(runtimeDB, taskIndexDB)
-	collector.LogDir = envOr("HUD_ZCODE_LOG_DIR", defaultLogDir(runtimeDB))
+	collector.LogDir = layout.LogDir
 	collector.HeartbeatSeconds = boundedPositiveEnv("HUD_ZCODE_GOAL_HEARTBEAT_SECONDS", 120, 3600)
 	collector.TurnFreshSeconds = boundedPositiveEnv("HUD_ZCODE_TURN_FRESH_SECONDS", 1800, 4*3600)
 	collector.RecentTerminalSeconds = boundedPositiveEnv("HUD_ZCODE_GOAL_RECENT_TERMINAL_SECONDS", 1800, 86400)
