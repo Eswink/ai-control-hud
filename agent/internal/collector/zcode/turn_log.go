@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Eswink/ai-control-hud/agent/internal/domain"
 )
 
 const (
@@ -17,16 +19,10 @@ const (
 )
 
 type turnLogState struct {
-	Open      bool
-	StartedAt time.Time
-	UpdatedAt time.Time
-}
-
-type turnLogEvent struct {
-	Event          string          `json:"event"`
-	SessionID      string          `json:"sessionId"`
-	SessionIDSnake string          `json:"session_id"`
-	Timestamp      json.RawMessage `json:"timestamp"`
+	Open            bool
+	StartedAt       time.Time
+	UpdatedAt       time.Time
+	BackgroundTasks map[string]struct{}
 }
 
 func defaultLogDir(runtimeDB string) string {
@@ -84,34 +80,67 @@ func (c *Collector) readTurnStates() (map[string]turnLogState, error) {
 			if len(line) == 0 {
 				continue
 			}
-			var event turnLogEvent
-			if json.Unmarshal(line, &event) != nil {
+
+			var root map[string]json.RawMessage
+			if json.Unmarshal(line, &root) != nil {
 				continue
 			}
-			sessionID := strings.TrimSpace(event.SessionID)
-			if sessionID == "" {
-				sessionID = strings.TrimSpace(event.SessionIDSnake)
-			}
+			sessionID := logSessionID(root)
 			if sessionID == "" {
 				continue
 			}
-			timestamp, ok := parseTurnLogTimestamp(event.Timestamp)
+			timestamp, ok := logTimestamp(root)
 			if !ok {
+				continue
+			}
+			eventName := strings.ToLower(strings.TrimSpace(evidenceEventName(root)))
+			if eventName == "" {
 				continue
 			}
 
 			state := states[sessionID]
-			switch strings.ToLower(strings.TrimSpace(event.Event)) {
+			switch eventName {
 			case "turn.started":
+				alreadyActive := state.Open || len(state.BackgroundTasks) > 0
 				state.Open = true
-				state.StartedAt = timestamp
+				if !alreadyActive || state.StartedAt.IsZero() {
+					state.StartedAt = timestamp
+				}
 				state.UpdatedAt = timestamp
+
 			case "turn.completed", "turn.failed", "turn.cancelled", "turn.canceled":
 				state.Open = false
 				state.UpdatedAt = timestamp
-			default:
-				if state.Open && (state.UpdatedAt.IsZero() || timestamp.After(state.UpdatedAt)) {
+
+			case "session.updated":
+				taskID := nestedString(root, "taskId")
+				status := nestedString(root, "status")
+				if taskID != "" && status != "" {
+					switch backgroundTaskStatus(status) {
+					case backgroundTaskRunning:
+						if state.BackgroundTasks == nil {
+							state.BackgroundTasks = map[string]struct{}{}
+						}
+						if !state.Open && len(state.BackgroundTasks) == 0 && state.StartedAt.IsZero() {
+							state.StartedAt = timestamp
+						}
+						state.BackgroundTasks[taskID] = struct{}{}
+						state.UpdatedAt = timestamp
+					case backgroundTaskTerminal:
+						if state.BackgroundTasks != nil {
+							delete(state.BackgroundTasks, taskID)
+						}
+						state.UpdatedAt = timestamp
+					}
+				} else if state.Open || len(state.BackgroundTasks) > 0 {
 					state.UpdatedAt = timestamp
+				}
+
+			default:
+				if state.Open || len(state.BackgroundTasks) > 0 {
+					if state.UpdatedAt.IsZero() || timestamp.After(state.UpdatedAt) {
+						state.UpdatedAt = timestamp
+					}
 				}
 			}
 			states[sessionID] = state
@@ -120,8 +149,67 @@ func (c *Collector) readTurnStates() (map[string]turnLogState, error) {
 	return states, nil
 }
 
+type backgroundTaskState int
+
+const (
+	backgroundTaskUnknown backgroundTaskState = iota
+	backgroundTaskRunning
+	backgroundTaskTerminal
+)
+
+func backgroundTaskStatus(raw string) backgroundTaskState {
+	switch normalizeStatus(raw) {
+	case domain.TaskRunning, domain.TaskWaiting:
+		return backgroundTaskRunning
+	case domain.TaskCompleted, domain.TaskFailed:
+		return backgroundTaskTerminal
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "cancelled", "canceled", "stopped", "killed", "terminated":
+		return backgroundTaskTerminal
+	default:
+		return backgroundTaskUnknown
+	}
+}
+
+func logSessionID(root map[string]json.RawMessage) string {
+	for _, key := range []string{"sessionId", "session_id"} {
+		if value := rawString(root[key]); value != "" {
+			return value
+		}
+	}
+	for _, container := range []string{"payload", "context"} {
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(root[container], &nested) != nil {
+			continue
+		}
+		for _, key := range []string{"sessionId", "session_id"} {
+			if value := rawString(nested[key]); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func logTimestamp(root map[string]json.RawMessage) (time.Time, bool) {
+	if timestamp, ok := parseTurnLogTimestamp(root["timestamp"]); ok {
+		return timestamp, true
+	}
+	for _, container := range []string{"payload", "context"} {
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(root[container], &nested) != nil {
+			continue
+		}
+		if timestamp, ok := parseTurnLogTimestamp(nested["timestamp"]); ok {
+			return timestamp, true
+		}
+	}
+	return time.Time{}, false
+}
+
 func (state turnLogState) active(now time.Time, freshSeconds int) bool {
-	if !state.Open || state.UpdatedAt.IsZero() {
+	if (!state.Open && len(state.BackgroundTasks) == 0) || state.UpdatedAt.IsZero() {
 		return false
 	}
 	freshSeconds = bounded(freshSeconds, 1800, 4*3600)
