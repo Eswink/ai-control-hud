@@ -11,6 +11,8 @@ if (-not (Test-Path $agent)) {
 $root = Join-Path $env:RUNNER_TEMP "ai-control-hud-g6-service-smoke"
 $runtimeDb = Join-Path $root "runtime.sqlite"
 $taskIndexDb = Join-Path $root "tasks-index.sqlite"
+$reboundRuntimeDb = Join-Path $root "rebound-runtime.sqlite"
+$reboundTaskIndexDb = Join-Path $root "rebound-tasks-index.sqlite"
 $apiKeyFile = Join-Path $root "commandcode.key"
 $badUpgradeAgent = Join-Path $root "broken-upgrade.exe"
 $implicitProviderConfig = Join-Path $repoRoot ".local\commandcode-provider.json"
@@ -34,6 +36,12 @@ if ($null -eq $pythonCommand) {
     --task-index $taskIndexDb
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to create synthetic G6 ZCode databases"
+}
+& $pythonCommand.Source (Join-Path $repoRoot "scripts\g4_state_db.py") init `
+    --runtime $reboundRuntimeDb `
+    --task-index $reboundTaskIndexDb
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to create synthetic rebound ZCode databases"
 }
 
 [System.IO.File]::WriteAllText($apiKeyFile, "test-only`n", [System.Text.UTF8Encoding]::new($false))
@@ -193,6 +201,30 @@ try {
     $state = Wait-AgentState
     if ($state.zcode.summary.running -ne 1) {
         throw "unexpected synthetic ZCode running count: $($state.zcode.summary.running)"
+    }
+
+    Write-Host "[g6-ci] rebinding installed service to newly resolved ZCode sources"
+    $env:HUD_ZCODE_RUNTIME_DB = $reboundRuntimeDb
+    $env:HUD_ZCODE_DB = $reboundTaskIndexDb
+    try {
+        & $agent service refresh-zcode --config $machineConfig
+        if ($LASTEXITCODE -ne 0) {
+            throw "service refresh-zcode failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Remove-Item Env:HUD_ZCODE_RUNTIME_DB -ErrorAction SilentlyContinue
+        Remove-Item Env:HUD_ZCODE_DB -ErrorAction SilentlyContinue
+    }
+    $machineState = Get-Content $machineConfig -Raw | ConvertFrom-Json
+    if ([IO.Path]::GetFullPath($machineState.zcodeRuntimeDb) -ne [IO.Path]::GetFullPath($reboundRuntimeDb)) {
+        throw "service refresh-zcode did not update runtime source"
+    }
+    if ([IO.Path]::GetFullPath($machineState.zcodeTaskIndexDb) -ne [IO.Path]::GetFullPath($reboundTaskIndexDb)) {
+        throw "service refresh-zcode did not update task-index source"
+    }
+    $state = Wait-AgentState
+    if ($state.zcode.summary.running -ne 1) {
+        throw "rebound ZCode sources did not become healthy"
     }
 
     Write-Host "[g6-ci] upgrading while service is running"
