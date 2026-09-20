@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"time"
 
@@ -40,8 +41,13 @@ func runZCodeEvidence(args []string) error {
 	evidence.LayoutSource = sanitizeBindingLabel(layout.Source, "unknown")
 	evidence.ProviderConfigCandidates = len(layout.ProviderConfigPaths)
 	for _, path := range layout.ProviderConfigPaths {
-		if readableRegularFile(path) {
-			evidence.ProviderConfigsReadable++
+		if !readableRegularFile(path) {
+			continue
+		}
+		evidence.ProviderConfigsReadable++
+		if parsed, entries := providerConfigEvidence(path); parsed {
+			evidence.ProviderConfigsParsed++
+			evidence.ProviderEntriesFound += entries
 		}
 	}
 
@@ -49,4 +55,32 @@ func runZCodeEvidence(args []string) error {
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(evidence)
+}
+
+
+const maxProviderEvidenceBytes = int64(1024 * 1024)
+
+func providerConfigEvidence(path string) (parsed bool, entries int) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, 0
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxProviderEvidenceBytes {
+		return false, 0
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxProviderEvidenceBytes+1))
+	if err != nil || int64(len(data)) > maxProviderEvidenceBytes {
+		return false, 0
+	}
+
+	var root struct {
+		Provider map[string]json.RawMessage `json:"provider"`
+	}
+	if zcodepath.DecodeJSONC(data, &root) != nil || root.Provider == nil {
+		return false, 0
+	}
+	return true, len(root.Provider)
 }

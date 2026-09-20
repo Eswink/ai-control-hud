@@ -5,13 +5,36 @@
 The target machine does **not** consume Command Code through the Command Code CLI. Command Code is configured as a third-party model provider inside ZCode.
 
 ```text
-ZCode
-  -> ~/.zcode/v2/config.json provider entry
+ZCode effective v2 root
+  -> config.json provider entry
   -> OpenAI/Anthropic-compatible Command Code endpoint
   -> Command Code plan/credits
 ```
 
-ZCode's current provider configuration recognizes connection fields such as `options.apiKey`, `options.baseURL`, `options.apiKeyRequired`, and `options.headers`. The API key remains local to the development PC.
+The effective provider-config root is resolved by the same ZCode layout policy
+as task discovery. With the default layout it is
+`~/.zcode/v2/config.json`; when ZCode Desktop's `setting.json` selects a
+custom `dataBaseDir`, the first candidate becomes
+`<dataBaseDir>/.zcode/v2/config.json`. `ZCODE_HOME` replaces the whole
+`.zcode` root, and `HUD_ZCODE_CONFIG` remains an explicit highest-priority
+leaf override. The historical profile `v2/config.json` remains a lower
+compatibility candidate because current ZCode builds have exhibited split
+persistence after data-root changes.
+
+Provider config parsing accepts the UTF-8 BOM and JSONC line/block comments
+used by current ZCode tooling. Candidate order is deterministic; an existing
+but malformed effective config fails explicitly rather than silently selecting
+a stale fallback provider.
+
+ZCode's current provider configuration recognizes connection fields such as
+`options.apiKey`, `options.baseURL`, `options.apiKeyRequired`, and
+`options.headers`. Provider discovery is read-only.
+
+For production Agent/service operation, discovery of a different ZCode config
+does **not** automatically replace the protected CommandCode credential.
+Credentials remain operator-controlled in the platform SecretStore; importing
+or replacing one requires the explicit `commandcode configure` or
+`--provider-config` compatibility path.
 
 ## Provider detection
 

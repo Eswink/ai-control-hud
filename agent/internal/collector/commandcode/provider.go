@@ -59,7 +59,7 @@ func LoadProvider(path, explicitProviderID string) (*Provider, error) {
 	}
 
 	var root rawConfig
-	if err := json.Unmarshal(data, &root); err != nil {
+	if err := zcodepath.DecodeJSONC(data, &root); err != nil {
 		return nil, errors.New("ZCode provider config could not be read")
 	}
 	if root.Provider == nil {

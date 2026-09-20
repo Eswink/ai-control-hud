@@ -35,6 +35,8 @@ type CompatibilityEvidence struct {
 	BackgroundTaskTurnStarts   int            `json:"backgroundTaskTurnStarts"`
 	ProviderConfigCandidates   int            `json:"providerConfigCandidates"`
 	ProviderConfigsReadable    int            `json:"providerConfigsReadable"`
+	ProviderConfigsParsed      int            `json:"providerConfigsParsed"`
+	ProviderEntriesFound       int            `json:"providerEntriesFound"`
 }
 
 // CollectCompatibilityEvidence inspects only bounded schema/event metadata.

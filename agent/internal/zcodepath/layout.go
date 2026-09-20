@@ -116,15 +116,20 @@ func dataBaseDirFromSetting(path string, readFile func(string) ([]byte, error)) 
 	if err != nil {
 		return ""
 	}
-	data = []byte(strings.TrimPrefix(string(data), "\ufeff"))
-	data = stripJSONComments(data)
-
 	var root map[string]any
-	if json.Unmarshal(data, &root) != nil {
+	if DecodeJSONC(data, &root) != nil {
 		return ""
 	}
 	value, _ := root["dataBaseDir"].(string)
 	return strings.TrimSpace(value)
+}
+
+// DecodeJSONC decodes ZCode-owned JSON/JSONC without exposing or rewriting it.
+// It accepts the UTF-8 BOM and the line/block comments observed in current
+// ZCode settings/config files.
+func DecodeJSONC(data []byte, target any) error {
+	data = []byte(strings.TrimPrefix(string(data), "\ufeff"))
+	return json.Unmarshal(stripJSONComments(data), target)
 }
 
 func stripJSONComments(data []byte) []byte {
