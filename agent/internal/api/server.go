@@ -17,13 +17,15 @@ const (
 )
 
 type OutboxDiagnosticsProvider func(context.Context, time.Time) domain.OutboxDiagnostics
+type ZCodeStorageDiagnosticsProvider func() domain.ZCodeStorageDiagnostics
 
 type Server struct {
 	store             *store.SnapshotStore
 	version           string
 	started           time.Time
 	now               func() time.Time
-	outboxDiagnostics OutboxDiagnosticsProvider
+	outboxDiagnostics       OutboxDiagnosticsProvider
+	zcodeStorageDiagnostics ZCodeStorageDiagnosticsProvider
 }
 
 func New(store *store.SnapshotStore, version string, started time.Time) *Server {
@@ -40,6 +42,14 @@ func New(store *store.SnapshotStore, version string, started time.Time) *Server 
 // mutate the provider after Handler traffic starts.
 func (s *Server) SetOutboxDiagnosticsProvider(provider OutboxDiagnosticsProvider) {
 	s.outboxDiagnostics = provider
+}
+
+
+// SetZCodeStorageDiagnosticsProvider wires path-free source binding metadata.
+// The provider may inspect configured source accessibility but must never put
+// private filesystem paths into the returned diagnostics object.
+func (s *Server) SetZCodeStorageDiagnosticsProvider(provider ZCodeStorageDiagnosticsProvider) {
+	s.zcodeStorageDiagnostics = provider
 }
 
 func (s *Server) Handler() http.Handler {
@@ -88,6 +98,10 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			ZCode:       sourceDiagnostics(now, zcodeAdapterKind, state.ZCode.Health),
 			CommandCode: sourceDiagnostics(now, commandCodeAdapterKind, state.CommandCode.Health),
 		},
+	}
+	if s.zcodeStorageDiagnostics != nil {
+		storage := s.zcodeStorageDiagnostics()
+		payload.ZCodeStorage = &storage
 	}
 	if s.outboxDiagnostics != nil {
 		outbox := s.outboxDiagnostics(r.Context(), now)
