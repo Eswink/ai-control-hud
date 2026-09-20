@@ -12,6 +12,42 @@ The target machine exposes three useful read-only source families:
 
 The production HUD does not invoke a ZCode CLI binary and does not write any of these sources.
 
+## Effective storage-root resolution
+
+ZCode storage is no longer assumed to live only under the interactive user's
+`~/.zcode`. The Agent resolves one shared read-only layout for the task
+collector, turn logs and provider metadata.
+
+Resolution precedence is:
+
+1. `HUD_ZCODE_HOME` — explicit AI Control HUD whole-root override;
+2. `ZCODE_HOME` — whole ZCode root replacement (`v2/` and `cli/`);
+3. the interactive user's default `~/.zcode/v2/setting.json` `dataBaseDir`
+   — moves the Desktop-owned `v2` root to
+   `<dataBaseDir>/.zcode/v2` while leaving the CLI runtime root at the
+   interactive user's `~/.zcode/cli`;
+4. `ZCODE_DATA_BASE_DIR` — compatibility fallback for the same Desktop-owned
+   `v2` relocation;
+5. the historical `~/.zcode` layout.
+
+Existing explicit leaf overrides remain stronger for their own sources:
+`HUD_ZCODE_RUNTIME_DB`, `HUD_ZCODE_DB`, `HUD_ZCODE_LOG_DIR` and
+`HUD_ZCODE_CONFIG`.
+
+The `dataBaseDir` control file is parsed read-only and tolerates UTF-8 BOM,
+JSONC line/block comments, unknown fields, Unicode and space-containing paths.
+When a custom Desktop data root is active, provider discovery checks the
+effective custom `v2/config.json` first and retains the default-profile
+`v2/config.json` as a compatibility candidate because current ZCode builds
+have exhibited split persistence across these roots.
+
+This resolver follows observed ZCode behavior rather than claiming a stable
+vendor filesystem API. Official feedback #268/#272 documents current
+`dataBaseDir` split-root failures, while `ViviQuan/ZZ-Switch` independently
+implements the same `setting.json -> dataBaseDir -> <root>/.zcode/v2`
+resolution and `william0wang/zcode-acp` documents `ZCODE_HOME` as a full
+replacement for `~/.zcode`.
+
 ## Primary live source: runtime DB
 
 The production adapter reads `~/.zcode/cli/db/db.sqlite` in SQLite read-only mode.
