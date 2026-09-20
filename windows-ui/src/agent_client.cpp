@@ -90,6 +90,13 @@ std::wstring OptString(const JsonObject& object, std::wstring_view name) {
     return std::wstring(value.GetString());
 }
 
+bool OptBool(const JsonObject& object, std::wstring_view name, bool fallback = false) {
+    if (!HasValue(object, name)) return fallback;
+    const auto value = object.GetNamedValue(winrt::hstring(name));
+    if (value.ValueType() != JsonValueType::Boolean) return fallback;
+    return value.GetBoolean();
+}
+
 std::optional<double> OptNumber(const JsonObject& object, std::wstring_view name) {
     if (!HasValue(object, name)) return std::nullopt;
     const auto value = object.GetNamedValue(winrt::hstring(name));
@@ -197,6 +204,15 @@ void ParseDiagnostics(const std::string& body, DashboardSnapshot& snapshot) {
     if (!version || *version != 1) return;
     snapshot.agentVersion = OptString(root, L"version");
     snapshot.uptimeSeconds = OptInt64(root, L"uptimeSeconds");
+    if (auto storage = OptObject(root, L"zcodeStorage")) {
+        snapshot.zcodeStorage.available = true;
+        snapshot.zcodeStorage.bindingMode = OptString(*storage, L"bindingMode");
+        snapshot.zcodeStorage.layoutSource = OptString(*storage, L"layoutSource");
+        snapshot.zcodeStorage.runtimeDatabaseReadable = OptBool(*storage, L"runtimeDatabaseReadable");
+        snapshot.zcodeStorage.taskIndexReadable = OptBool(*storage, L"taskIndexReadable");
+        snapshot.zcodeStorage.turnLogReadable = OptBool(*storage, L"turnLogReadable");
+        snapshot.zcodeStorage.refreshRecommended = OptBool(*storage, L"refreshRecommended");
+    }
     if (auto outbox = OptObject(root, L"outbox")) {
         snapshot.outbox.available = true;
         snapshot.outbox.status = OptString(*outbox, L"status");
