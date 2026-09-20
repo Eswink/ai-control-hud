@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const CompatibilityEvidenceVersion = 1
+const CompatibilityEvidenceVersion = 2
 
 var safeEvidenceEventName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
@@ -31,9 +31,13 @@ type CompatibilityEvidence struct {
 	TurnLogRecordsParsed       int            `json:"turnLogRecordsParsed"`
 	EventCounts                map[string]int `json:"eventCounts"`
 	OtherEventRecords          int            `json:"otherEventRecords"`
-	SessionUpdatedTaskSignals  int            `json:"sessionUpdatedTaskSignals"`
-	BackgroundTaskTurnStarts   int            `json:"backgroundTaskTurnStarts"`
-	ProviderConfigCandidates   int            `json:"providerConfigCandidates"`
+	SessionUpdatedTaskSignals       int            `json:"sessionUpdatedTaskSignals"`
+	BackgroundTaskTurnStarts        int            `json:"backgroundTaskTurnStarts"`
+	BackgroundTrackingStarts        int            `json:"backgroundTrackingStarts"`
+	BackgroundTrackingTerminals     int            `json:"backgroundTrackingTerminals"`
+	BackgroundTrackingStartLinked   int            `json:"backgroundTrackingStartSessionLinked"`
+	BackgroundTrackingTerminalLinked int           `json:"backgroundTrackingTerminalSessionLinked"`
+	ProviderConfigCandidates        int            `json:"providerConfigCandidates"`
 	ProviderConfigsReadable    int            `json:"providerConfigsReadable"`
 	ProviderConfigsParsed      int            `json:"providerConfigsParsed"`
 	ProviderEntriesFound       int            `json:"providerEntriesFound"`
@@ -130,6 +134,18 @@ func (c *Collector) collectTurnLogEvidence(evidence *CompatibilityEvidence) {
 			}
 			if eventName == "turn.started" && nestedString(root, "inputSource") == "background_task" {
 				evidence.BackgroundTaskTurnStarts++
+			}
+			switch eventName {
+			case "background_task.tracking.started":
+				evidence.BackgroundTrackingStarts++
+				if logSessionID(root) != "" {
+					evidence.BackgroundTrackingStartLinked++
+				}
+			case "background_task.tracking.terminal":
+				evidence.BackgroundTrackingTerminals++
+				if logSessionID(root) != "" {
+					evidence.BackgroundTrackingTerminalLinked++
+				}
 			}
 		}
 	}
