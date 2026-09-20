@@ -158,3 +158,50 @@ func TestLiveGoalMergesConcurrentOrdinaryTurnWithoutDuplicates(t *testing.T) {
 		}
 	}
 }
+
+
+func TestBackgroundWorkflowKeepsTerminalGoalSessionRunning(t *testing.T) {
+	now := time.Date(2026, 9, 20, 10, 30, 0, 0, time.UTC)
+	root := t.TempDir()
+	runtimeDB := filepath.Join(root, "db.sqlite")
+	logDir := filepath.Join(root, "log")
+	createRuntimeDB(t, runtimeDB, now, now.Add(-2*time.Second))
+
+	db, err := sql.Open("sqlite", runtimeDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE session_target SET status='completed'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE todo SET status='completed'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTurnLog(t, logDir,
+		typedTurnLine("session.updated", "session-live", now.Add(-20*time.Second), `{"taskId":"background-private","status":"running"}`),
+	)
+
+	collector := New(runtimeDB, "")
+	collector.LogDir = logDir
+	collector.Now = func() time.Time { return now }
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Summary.Running != 1 || snapshot.Summary.Completed != 0 {
+		t.Fatalf("background workflow did not override terminal Goal projection: %+v", snapshot.Summary)
+	}
+	if len(snapshot.Tasks) != 1 || snapshot.Tasks[0].Status != "running" {
+		t.Fatalf("unexpected tasks: %+v", snapshot.Tasks)
+	}
+	if snapshot.Tasks[0].Title != "Goal 模式迭代与 collector-quality 持续失败取证" {
+		t.Fatalf("Goal metadata enrichment was lost: %+v", snapshot.Tasks[0])
+	}
+	if snapshot.Tasks[0].DurationSeconds == nil || *snapshot.Tasks[0].DurationSeconds != 20 {
+		t.Fatalf("background lifecycle duration = %#v", snapshot.Tasks[0].DurationSeconds)
+	}
+}

@@ -231,10 +231,29 @@ func (c *Collector) collectGoals(ctx context.Context) (*Snapshot, bool, error) {
 	}
 
 	now := c.Now().UTC()
+	turnStates, _ := c.readTurnStates()
 	tasks := make([]domain.TaskSummary, 0, limit)
 	sessionIDs := make(map[string]struct{}, limit)
 	for _, row := range goalRows {
 		if task := c.goalTask(row, todos[row.SessionID], now); task != nil {
+			// ZCode 3.14 can keep a background workflow alive after the Goal
+			// projection has already reached a terminal state. A fresh session
+			// lifecycle signal is stronger liveness evidence than that lagging
+			// terminal projection, while Goal metadata remains the best title /
+			// workspace/activity enrichment for the same user session.
+			if (task.Status == domain.TaskCompleted || task.Status == domain.TaskFailed) {
+				if state, ok := turnStates[row.SessionID]; ok && state.active(now, c.TurnFreshSeconds) {
+					task.Status = domain.TaskRunning
+					updatedAt := state.UpdatedAt
+					task.UpdatedAt = &updatedAt
+					startedAt := state.StartedAt
+					if !startedAt.IsZero() {
+						task.StartedAt = &startedAt
+						duration := int(ageSeconds(now, startedAt))
+						task.DurationSeconds = &duration
+					}
+				}
+			}
 			tasks = append(tasks, *task)
 			sessionIDs[row.SessionID] = struct{}{}
 		}
