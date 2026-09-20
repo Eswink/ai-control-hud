@@ -25,7 +25,7 @@ func TestDefaultConfigPathsFollowZCodeDataBaseDirAndPreferEffectiveConfig(t *tes
 	if err := os.MkdirAll(filepath.Dir(customConfig), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	customBody := "﻿{\n" +
+	customBody := "\xef\xbb\xbf{\n" +
 		"  // current ZCode provider config may be JSONC\n" +
 		"  \"provider\": {\n" +
 		"    \"custom-commandcode\": {\n" +
