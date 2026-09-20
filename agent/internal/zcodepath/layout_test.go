@@ -145,7 +145,7 @@ func TestDecodeJSONCPreservesCommentMarkersInsideStrings(t *testing.T) {
 		URL  string `json:"url"`
 		Name string `json:"name"`
 	}
-	data := []byte("﻿{\n // comment\n \"url\": \"https://example.test/a//b\", /* block */\n \"name\": \"x/*literal*/y\"\n}")
+	data := []byte("\xef\xbb\xbf{\n // comment\n \"url\": \"https://example.test/a//b\", /* block */\n \"name\": \"x/*literal*/y\"\n}")
 	if err := DecodeJSONC(data, &got); err != nil {
 		t.Fatal(err)
 	}
