@@ -244,7 +244,7 @@ The JSON report contains only:
 - bounded event-name counts whose keys match `[A-Za-z0-9._-]{1,64}`;
 - counts of `session.updated` records carrying task/status metadata and
   `turn.started` records marked `inputSource=background_task`;
-- provider-config candidate/readable counts, never provider contents.
+- provider-config candidate/readable/parseable counts plus the total number of provider entries found, never provider IDs, URLs, keys or other provider contents.
 
 Unknown/unsafe event names are counted only as `otherEventRecords`. Payload
 text, task IDs, session IDs, full paths, provider URLs and keys are never
